@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "chimp"
-version = "0.5.1"
+version = "0.6.0"
 description = "Use MIDI controllers (Akai LPD8 mk2, KO II, MicroFreak, ...) to control a KDE Plasma desktop, plus a native LPD8 mk2 editor"
 readme = "README.md"
 license = "MIT"

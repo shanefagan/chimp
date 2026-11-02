@@ -41,9 +41,11 @@ $entry\\
 " "$spec"
 
 deb=packaging/debian/changelog
+# Debian changelog lines stay under 80 columns (lintian): wrap the note.
+deb_note=$(printf '%s\n' "$note" | fold -s -w 72 | sed -e 's/[[:space:]]*$//' -e '2,$s/^/    /')
 {
     printf 'chimp (%s-1) unstable; urgency=medium\n\n  * %s\n\n -- %s  %s\n\n' \
-        "$new" "$note" "$maint" "$(LC_ALL=C date -R)"
+        "$new" "$deb_note" "$maint" "$(LC_ALL=C date -R)"
     cat "$deb"
 } > "$deb.tmp" && mv "$deb.tmp" "$deb"
 

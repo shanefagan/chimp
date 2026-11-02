@@ -1,3 +1,10 @@
+chimp (0.6.0-1) unstable; urgency=medium
+
+  * Debian and Fedora packages; device hotplug, 14-bit learn and
+    game-volume fixes
+
+ -- Shane Fagan <mail@shanefagan.com>  Mon, 02 Nov 2026 19:28:43 +0000
+
 chimp (0.5.1-1) unstable; urgency=medium
 
   * Initial package
