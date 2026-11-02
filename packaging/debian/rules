@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: MIT
+
+export PYBUILD_NAME = chimp
+export PYBUILD_TEST_ARGS = -q -p no:cacheprovider
+# The tests make Qt objects; there's no display in a build.
+export QT_QPA_PLATFORM = offscreen
+
+%:
+	dh $@ --buildsystem=pybuild

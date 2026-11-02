@@ -1,0 +1,64 @@
+Source: chimp
+Section: sound
+Priority: optional
+Maintainer: Shane Fagan <mail@shanefagan.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-sequence-python3,
+               pybuild-plugin-pyproject,
+               python3-all,
+               python3-hatchling,
+               python3-pytest <!nocheck>,
+               python3-rtmidi <!nocheck>,
+               python3-pyside6.qtcore <!nocheck>,
+               python3-pyside6.qtdbus <!nocheck>,
+               python3-pyside6.qtgui <!nocheck>,
+               python3-pyside6.qtnetwork <!nocheck>,
+               python3-pyside6.qtqml <!nocheck>,
+               python3-pyside6.qtwebsockets <!nocheck>,
+               python3-pyside6.qtwidgets <!nocheck>
+Standards-Version: 4.7.2
+Homepage: https://github.com/shanefagan/chimp
+Vcs-Browser: https://github.com/shanefagan/chimp
+Vcs-Git: https://github.com/shanefagan/chimp.git
+Rules-Requires-Root: no
+
+Package: chimp
+Architecture: all
+Depends: ${misc:Depends},
+         ${python3:Depends},
+         libgtk-3-bin,
+         python3-pyside6.qtcore,
+         python3-pyside6.qtdbus,
+         python3-pyside6.qtgui,
+         python3-pyside6.qtnetwork,
+         python3-pyside6.qtqml,
+         python3-pyside6.qtquick,
+         python3-pyside6.qtquickcontrols2,
+         python3-pyside6.qtwebsockets,
+         python3-pyside6.qtwidgets,
+         python3-rtmidi,
+         qml6-module-org-kde-desktop,
+         qml6-module-org-kde-kirigami,
+         qml6-module-org-kde-layershell,
+         qml6-module-qtqml-workerscript,
+         qml6-module-qtquick,
+         qml6-module-qtquick-controls,
+         qml6-module-qtquick-dialogs,
+         qml6-module-qtquick-layouts,
+         qml6-module-qtquick-templates,
+         qml6-module-qtquick-window,
+         systemd,
+         wireplumber
+Recommends: pipewire-pulse,
+            python3-pulsectl
+Suggests: obs-studio
+Description: MIDI controllers as a KDE Plasma control deck
+ Chimp turns MIDI controllers into a control deck for the KDE Plasma
+ desktop: knobs for system, focused-app, playing-app and game volume,
+ brightness and microphone; pads for mute, media keys, shortcuts, apps,
+ commands and OBS scenes. It shows live values on the device's pad
+ lights and in an on-screen overlay.
+ .
+ It also replaces Akai's editor for the LPD8 mk2 (pads, knobs, programs
+ over SysEx), and learns any class-compliant controller (Teenage
+ Engineering KO II, Arturia MicroFreak and others) into profiles.

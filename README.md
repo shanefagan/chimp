@@ -20,6 +20,21 @@ user. Re-run it after updates. The package installs:
 - `/usr/lib/systemd/user/chimp.service`
 - `/usr/share/applications/chimp.desktop` ("Chimp") and its icon
 
+## Debian, Ubuntu and Fedora
+
+Every push builds a `.deb` (Debian 13+, Ubuntu 25.04+: the first with PySide6 6.8 and
+Plasma 6) and an `.rpm` (current Fedora), and every `vX.Y.Z` tag publishes them, with the
+Arch package, as a GitHub release.
+
+    sudo apt install ./chimp_*.deb      # or: sudo dnf install ./chimp-*.rpm
+    systemctl --user enable --now chimp.service
+
+Fedora has no `python3-rtmidi`, so the RPM builds python-rtmidi from its PyPI sdist into
+`/usr/lib64/chimp/python`, which only Chimp puts on its path.
+
+The packages don't enable the service for every user; the editor's **Desktop control**
+switch does it for you, or run the `systemctl` line above.
+
 ## Development
 
     just dev      # uv venv on top of system PySide6/Kirigami + editable install + dev tools
@@ -27,7 +42,15 @@ user. Re-run it after updates. The package installs:
     just check    # ruff (lint + format), bandit, pytest
     just bench    # knob-sweep benchmark: processes spawned and CPU
     just live     # hardware/desktop checks (LPD8 plugged in, Plasma session)
-    just pkg      # build the package only
+    just arch     # build the Arch package only
+    just deb / just rpm      # Debian / Fedora packages (in a container of that distro)
+    just bump 0.6.0 "note"   # set the version everywhere; then commit, tag v0.6.0, push
+
+CI (`.github/workflows/ci.yml`) runs the same recipes: `check` on Debian 13, `deb`,
+`deb-lint` and `deb-smoke` in Debian, `rpm`, `rpm-lint` and `rpm-smoke` in Fedora, `arch`
+and `arch-smoke` in Arch. Each smoke test installs the package and runs
+`chimp --check-install`, which imports every module and compiles every QML file
+offscreen, so a missing dependency fails the build.
 
 Python 3.12+, PySide6 and Kirigami from the system (the Kirigami QML plugins are built
 against the system Qt), `python-rtmidi`, optional `pulsectl`. Build backend: hatchling.
@@ -98,7 +121,7 @@ follow what you're doing:
   Filter chains (HeSuVi, EasyEffects) are skipped. The popup names the app.
 
 Window focus comes from a small KWin script the service loads (`chimp-focus`),
-which reports activations and fullscreen changes to `org.chimp.Service` on the session bus.
+which reports activations and fullscreen changes to `com.performativenonsense.chimp.service` on the session bus.
 There's no separate voice-chat knob: your own voice is the mic knob, and in-game voice comes
 out of the game's own audio stream.
 Pads: mute mic/speakers, media keys, launch app, any KDE global shortcut, shell command,

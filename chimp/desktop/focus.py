@@ -1,7 +1,7 @@
 """Which app is in front, which one is fullscreen, and which game is running.
 
 - Focus: a tiny KWin script reports every window activation / fullscreen change to
-  this service over D-Bus (org.chimp.Service). Plasma Wayland gives no other way to
+  this service over D-Bus (com.performativenonsense.chimp.service). Plasma Wayland gives no other way to
   ask for the active window's process.
 - Game: bpfrag's read-only system-bus interface (GamePid during a match). It knows
   real games by their traffic and Steam app id, so a fullscreen video doesn't count.
@@ -19,7 +19,7 @@ from PySide6.QtDBus import QDBusConnection
 
 from . import system
 
-BUS_NAME = "org.chimp.Service"
+BUS_NAME = "com.performativenonsense.chimp.service"
 SCRIPT_NAME = "chimp-focus"
 SCRIPT_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "chimp-focus.js"
 

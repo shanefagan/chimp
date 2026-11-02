@@ -463,6 +463,11 @@ class DesktopController(QObject):
 def main() -> int:
     from .config import migrate_legacy
 
+    if "--version" in sys.argv:
+        from ..selfcheck import chimp_version
+
+        print(f"chimpd {chimp_version()}")
+        return 0
     for line in migrate_legacy():
         log("copied settings from the old name:", line)
     if (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")) and "--no-tray" not in sys.argv:

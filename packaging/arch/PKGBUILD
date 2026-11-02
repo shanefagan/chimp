@@ -1,6 +1,6 @@
 # Maintainer: Shane Fagan <shanepatrickfagan@gmail.com>
 #
-# Local package. Run ./make-source.sh first to pack the source tree (`just pkg` and
+# Local package. Run ./make-source.sh first to pack the source tree (`just arch` and
 # ../../install.sh do that for you).
 
 pkgname=chimp
@@ -22,6 +22,7 @@ depends=(
   'systemd'          # busctl, user service
   'hicolor-icon-theme'
   'layer-shell-qt'   # on-screen overlay above fullscreen windows
+  'qqc2-desktop-style'  # the org.kde.desktop Qt Quick Controls style
 )
 optdepends=(
   'python-pulsectl: in-process volume/mute control (smoother knobs, no polling for pad lights)'
@@ -42,7 +43,7 @@ build() {
 
 check() {
   cd "$pkgname-$pkgver"
-  PYTHONPATH="$PWD" python -m pytest -q -p no:cacheprovider tests/test_*.py
+  QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" python -m pytest -q -p no:cacheprovider tests/test_*.py
 }
 
 package() {
@@ -51,6 +52,8 @@ package() {
   install -Dm644 packaging/chimp.desktop "$pkgdir/usr/share/applications/chimp.desktop"
   install -Dm644 chimp/icons/chimp.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/chimp.svg"
   install -Dm644 packaging/chimp.service "$pkgdir/usr/lib/systemd/user/chimp.service"
+  install -Dm644 packaging/man/chimp.1 "$pkgdir/usr/share/man/man1/chimp.1"
+  install -Dm644 packaging/man/chimpd.1 "$pkgdir/usr/share/man/man1/chimpd.1"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -24,9 +24,16 @@ Window {
     LayerShell.Window.layer: LayerShell.Window.LayerOverlay
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
     LayerShell.Window.exclusionZone: -1
-    LayerShell.Window.wantsToBeOnActiveScreen: true
     LayerShell.Window.anchors: (atTop ? LayerShell.Window.AnchorTop : LayerShell.Window.AnchorBottom)
                                | (atRight ? LayerShell.Window.AnchorRight : 0)
+
+    // Follow the active screen where layer-shell-qt can (6.4+; Debian 13 has 6.3).
+    // Set before the first show, which is when the layer surface is made.
+    Component.onCompleted: {
+        const lw = LayerShell.Window
+        if ("wantsToBeOnActiveScreen" in lw)
+            lw.wantsToBeOnActiveScreen = true
+    }
 
     readonly property color bg: "#d9121318"
     readonly property color fg: "#f2f3f5"

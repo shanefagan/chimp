@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: MIT
+#
+# Every push runs the checks and builds the .deb, .rpm and Arch package.
+# Pushing a tag vX.Y.Z (see `just bump`) also publishes them as a GitHub
+# release.
+#
+# Every build and test step is a recipe in the justfile, so CI runs what a
+# developer runs. Steps here only install tools.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Debian 13: PySide6, Kirigami and layer-shell-qt from the distribution,
+    # as Chimp uses them (the Kirigami QML plugins are built against its Qt).
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - name: Install the system PySide6/Kirigami, just, git and curl
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git just \
+            python3 python3-venv libasound2t64 \
+            python3-pyside6.qtcore python3-pyside6.qtdbus python3-pyside6.qtgui \
+            python3-pyside6.qtnetwork python3-pyside6.qtqml python3-pyside6.qtquick \
+            python3-pyside6.qtquickcontrols2 python3-pyside6.qtwebsockets python3-pyside6.qtwidgets \
+            qml6-module-org-kde-desktop qml6-module-org-kde-kirigami qml6-module-org-kde-layershell \
+            qml6-module-qtqml-workerscript qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-dialogs qml6-module-qtquick-layouts qml6-module-qtquick-templates \
+            qml6-module-qtquick-window
+      - uses: actions/checkout@v7
+      - name: uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Venv on the system packages, with the dev tools
+        run: just dev
+
+      # The same steps as `just check`, one at a time so each shows up on its own.
+      - name: Lint and format (ruff)
+        run: just lint
+      - name: Security (bandit)
+        run: just security
+      - name: Unit tests
+        run: just test
+      - name: Every module imports, every QML file compiles
+        run: just check-install
+
+  deb:
+    # Debian 13 / Ubuntu 25.04+: the first with PySide6 6.8 and Plasma 6.
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - name: Install packaging tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git just lintian \
+            dpkg-dev devscripts equivs
+      - uses: actions/checkout@v7
+      - name: Install the Build-Depends
+        run: |
+          mk-build-deps -i -r -t "apt-get -y --no-install-recommends" packaging/debian/control
+          rm -f chimp-build-deps_*
+      - name: Build .deb
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          just deb
+      - name: Lint
+        run: just deb-lint
+      - name: Install, check it loads, remove, purge
+        run: just deb-smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chimp-deb
+          path: target/debian/*.deb
+
+  rpm:
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - name: Install rpm tooling
+        run: dnf -y install git rpm-build rpmlint just python3-pip dnf-plugins-core glibc-langpack-en
+      - uses: actions/checkout@v7
+      - name: Install the spec's BuildRequires
+        run: dnf -y builddep packaging/rpm/chimp.spec
+      - name: Build .src.rpm and .rpm
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          just rpm
+      - name: Lint
+        run: just rpm-lint
+      - name: Install, check it loads, remove
+        run: just rpm-smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chimp-rpm
+          path: |
+            target/rpm/RPMS/*/*.rpm
+            target/rpm/SRPMS/*.rpm
+
+  arch:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install build tools and a user for makepkg
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git just
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+      - uses: actions/checkout@v7
+      - name: Build the package (makepkg runs the tests)
+        run: |
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "git config --global --add safe.directory '$GITHUB_WORKSPACE' && just arch"
+      - name: Install, check it loads, remove
+        run: just arch-smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chimp-arch
+          path: packaging/arch/chimp-*.pkg.tar.zst
+
+  release:
+    # A vX.Y.Z tag publishes everything the jobs above built.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, deb, rpm, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install just
+        run: sudo apt-get update && sudo apt-get install -y just
+      - name: Tag matches the version in pyproject.toml
+        run: just check-tag "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Publish the release
+        # The release notes are the annotated tag's message. checkout can
+        # leave the tag as a plain ref, so fetch the tag object itself.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag --list "$GITHUB_REF_NAME" --format='%(contents:subject)%0a%0a%(contents:body)' > notes.md
+          if grep -q -- '-----BEGIN .* SIGNATURE-----' notes.md; then
+            echo "::error::the tag message contains an old signature; re-tag with the notes from a file (git tag -s -f -F notes.md $GITHUB_REF_NAME)"
+            exit 1
+          fi
+          mkdir release
+          find artifacts -type f -exec mv -t release/ {} +
+          (cd release && sha256sum -- * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "Chimp ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag release/*

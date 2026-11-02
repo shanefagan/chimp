@@ -20,8 +20,14 @@ HERE = Path(__file__).resolve().parent
 
 
 def main() -> int:
+    from . import selfcheck
     from .desktop.config import migrate_legacy
 
+    if "--version" in sys.argv:
+        print(f"chimp {selfcheck.chimp_version()}")
+        return 0
+    if "--check-install" in sys.argv:
+        return selfcheck.check_install()
     migrate_legacy()
     if not os.environ.get("QT_QUICK_CONTROLS_STYLE"):
         QQuickStyle.setStyle("org.kde.desktop")

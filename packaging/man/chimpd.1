@@ -1,0 +1,42 @@
+.TH CHIMPD 1 "2026-11" "chimp 0.5.1"
+.SH NAME
+chimpd \- Chimp's desktop service: MIDI controls to desktop actions
+.SH SYNOPSIS
+.B chimpd
+.RB [ \-\-no\-tray ]
+.br
+.B chimpd
+.B \-\-version
+.SH DESCRIPTION
+.B chimpd
+listens to every MIDI controller on the ALSA sequencer and carries out the
+actions set in
+.BR chimp (1):
+volume, mute, brightness, media keys, shortcuts, apps, commands and OBS
+scenes. It shows the result in Plasma's on-screen display or its own
+overlay, keeps the LPD8 mk2's pad lights in step with the desktop, and puts
+an icon in the system tray.
+.PP
+It is meant to run as the systemd user service:
+.PP
+.RS
+systemctl \-\-user enable \-\-now chimp.service
+.RE
+.SH OPTIONS
+.TP
+.B \-\-no\-tray
+Run without the tray icon.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH FILES
+.TP
+.I ~/.config/chimp/
+Settings, written by
+.BR chimp (1);
+changes are picked up while running.
+.TP
+.I $XDG_RUNTIME_DIR/chimp.json
+Current state, for the editor.
+.SH SEE ALSO
+.BR chimp (1)

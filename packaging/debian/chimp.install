@@ -1,0 +1,3 @@
+packaging/chimp.desktop usr/share/applications
+packaging/chimp.service usr/lib/systemd/user
+chimp/icons/chimp.svg usr/share/icons/hicolor/scalable/apps

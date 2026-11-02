@@ -1,0 +1,48 @@
+.TH CHIMP 1 "2026-11" "chimp 0.5.1"
+.SH NAME
+chimp \- MIDI controllers as a KDE Plasma control deck (editor)
+.SH SYNOPSIS
+.B chimp
+.RB [ \-\-program
+.IR N ]
+.RB [ \-\-device
+.IR NAME ]
+.br
+.B chimp
+.BR \-\-version " | " \-\-check\-install
+.SH DESCRIPTION
+.B chimp
+is the editor for Chimp. It reads and writes the four programs of an Akai
+LPD8 mk2 (pads, knobs, colours, channels) over SysEx, learns the controls of
+any other MIDI controller, and assigns desktop actions to each control:
+volume of the system, the focused app, a playing app or the running game,
+microphone, brightness, media keys, shortcuts, apps, commands and OBS scenes.
+.PP
+The actions are carried out by
+.BR chimpd (1),
+which runs as the systemd user service
+.BR chimp.service .
+.SH OPTIONS
+.TP
+.BI \-\-program " N"
+Open on LPD8 program tab
+.I N
+(1\(en4).
+.TP
+.BI \-\-device " NAME"
+Open on the MIDI device whose name contains
+.IR NAME .
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-\-check\-install
+Import every module and compile every QML file offscreen, then exit: 0 if
+everything loads, 1 with the errors otherwise. Needs no display or device.
+.SH FILES
+.TP
+.I ~/.config/chimp/
+Desktop actions, device profiles and overlay settings.
+.SH SEE ALSO
+.BR chimpd (1),
+.BR systemctl (1)
