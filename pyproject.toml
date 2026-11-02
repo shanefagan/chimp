@@ -32,7 +32,7 @@ chimp = "chimp.app:main"
 chimpd = "chimp.desktop.service:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.7", "bandit>=1.7", "pulsectl>=24"]
+dev = ["pytest>=8", "ruff>=0.7", "bandit>=1.9.4", "pulsectl>=24"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["chimp"]
