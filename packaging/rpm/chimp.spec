@@ -17,7 +17,7 @@
 %global __requires_exclude ^python3(\\.[0-9]+)?dist\\(python-rtmidi\\)
 
 Name:           chimp
-Version:        0.6.0
+Version:        0.6.1
 Release:        1%{?dist}
 Summary:        MIDI controllers as a KDE Plasma control deck
 
@@ -128,6 +128,9 @@ export PYTHONPATH=%{buildroot}%{python3_sitelib}:%{buildroot}%{privdir}
 %{_mandir}/man1/chimpd.1*
 
 %changelog
+* Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.6.1-1
+- CI fixes; Chimp no longer fails to start when pulsectl is installed without libpulse
+
 * Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.6.0-1
 - Debian and Fedora packages; device hotplug, 14-bit learn and game-volume fixes
 
