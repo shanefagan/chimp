@@ -74,6 +74,12 @@ box Program 4 has actions (master/mic/Brave/Discord volume, brightness, mutes, m
   PipeWire/Plasma every half second, so turning a knob visibly moves it.
 - Pad tiles show live state (mic/speakers muted).
 - Plasma's on-screen display pops up for volume/mute and when you switch programs on the LPD8.
+- **Overlay**: while you use a controller, a see-through picture of it appears on screen
+  (Plasma's overlay layer via layer-shell-qt, so it also shows over fullscreen games,
+  never takes focus and lets clicks through) and fades out 2.5 s after you stop: the
+  LPD8 laid out like the hardware, other devices as the current group's pads, with each
+  control's action, live values and presses. It replaces Plasma's volume popups for
+  knobs. Settings: on/off, position, "over fullscreen games" (editor and tray menu).
 - The service puts an LPD8 icon in the system tray: full colour while it's controlling the
   desktop, greyed out otherwise. Hover for the program and last action, click to open the
   editor, right-click to pause/resume or quit until next login.

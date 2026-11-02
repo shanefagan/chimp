@@ -79,7 +79,7 @@ BUTTON_ACTIONS: dict[str, tuple[str, str, str]] = {
 }
 
 CONTROL_KINDS = ("knob", "fader", "encoder", "button")
-MSG_TYPES = ("cc", "note", "pb", "pc")
+MSG_TYPES = ("cc", "note", "pb", "pc", "rt")  # rt = start/continue/stop
 # absolute = position 0-127 (pb: 0-16383); rel64: 64 +/- n; rel2c: 1..63 up, 65..127 down
 MODES = ("absolute", "rel64", "rel2c", "momentary", "toggle")
 
@@ -91,6 +91,8 @@ MEDIA_SHORTCUTS = {
     "previous": "previousmedia",
     "stop": "stopmedia",
 }
+
+OVERLAY_POSITIONS = ("bottom", "top", "bottom-right", "top-right")
 
 # Pads whose LED reflects on/off state
 STATEFUL_PADS = {"mic_mute", "output_mute", "obs_scene", "obs_record", "obs_stream", "obs_mute"}
@@ -170,6 +172,7 @@ class Control:
     number: int = 0  # CC/note/program number (unused for pb)
     mode: str = "absolute"
     action: Action = field(default_factory=Action)
+    group: str = ""  # display group/bank ("Group A"); doesn't affect matching
 
     @property
     def address(self) -> tuple[str, int, int]:
@@ -181,8 +184,9 @@ class Control:
             "note": f"note {self.number}",
             "pb": "pitch bend",
             "pc": f"program {self.number}",
+            "rt": {0xFA: "Start", 0xFB: "Continue", 0xFC: "Stop"}.get(self.number, "transport"),
         }[self.msg]
-        return f"{where} · ch {self.channel}"
+        return where if self.msg == "rt" else f"{where} · ch {self.channel}"
 
     def to_dict(self) -> dict:
         return {
@@ -193,6 +197,7 @@ class Control:
             "number": self.number,
             "mode": self.mode,
             "action": self.action.to_dict(),
+            **({"group": self.group} if self.group else {}),
         }
 
     @classmethod
@@ -214,6 +219,7 @@ class Control:
         a = Action(str(act.get("type", "none")), str(act.get("target", "")))
         valid = BUTTON_ACTIONS if c.kind == "button" else KNOB_ACTIONS
         c.action = a if a.type in valid else Action()
+        c.group = str(d.get("group", ""))[:40]
         return c
 
 
@@ -276,6 +282,9 @@ def _parse_actions(items, n: int, valid: dict, fallback) -> list[Action]:
 class DesktopConfig:
     osd: bool = True  # Plasma on-screen display for volume/mute/program changes
     leds: bool = True  # light pads to show mute/record state
+    overlay: bool = True  # Chimp's on-screen overlay of the device while you use it
+    overlay_position: str = "bottom"  # bottom | top | bottom-right | top-right
+    overlay_over_games: bool = True  # also show it over fullscreen games
     programs: dict[int, ProgramActions] = field(default_factory=_default_programs)
     devices: dict[str, DeviceConfig] = field(default_factory=dict)
     obs: ObsSettings = field(default_factory=ObsSettings)
@@ -312,6 +321,9 @@ class DesktopConfig:
             "version": 3,
             "osd": self.osd,
             "leds": self.leds,
+            "overlay": self.overlay,
+            "overlay_position": self.overlay_position,
+            "overlay_over_games": self.overlay_over_games,
             "programs": {str(s): pa.to_dict() for s, pa in sorted(self.programs.items())},
             "devices": {name: dev.to_dict() for name, dev in sorted(self.devices.items())},
             "obs": {"host": self.obs.host, "port": self.obs.port, "password": self.obs.password},
@@ -356,6 +368,11 @@ class DesktopConfig:
         return cls(
             osd=bool(d.get("osd", True)),
             leds=bool(d.get("leds", True)),
+            overlay=bool(d.get("overlay", True)),
+            overlay_position=str(d.get("overlay_position", "bottom"))
+            if d.get("overlay_position") in OVERLAY_POSITIONS
+            else "bottom",
+            overlay_over_games=bool(d.get("overlay_over_games", True)),
             programs=progs,
             devices=devices,
             obs=ObsSettings(str(obs.get("host", "localhost")), port, str(obs.get("password", ""))),

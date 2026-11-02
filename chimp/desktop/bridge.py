@@ -10,14 +10,16 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, Signal, Slot
 
-from . import system, unit
+from . import system, templates, unit
 from .config import (
     BUTTON_ACTIONS,
+    CONFIG_PATH,
     KNOB_ACTIONS,
     MEDIA_SHORTCUTS,
     ON_COLOURS,
+    OVERLAY_POSITIONS,
     PAD_ACTIONS,
     Action,
     DesktopConfig,
@@ -129,6 +131,7 @@ class DesktopBridge(QObject):
 
         self._device = LPD8
         self._profile = 0
+        self._group = ""
         self._learning = False
         self._learn_events: list[tuple[float, list[int]]] = []
         self._learn_preview: list = []
@@ -138,6 +141,15 @@ class DesktopBridge(QObject):
         self.hub.message.connect(self._on_midi)
         self.hub.start()
         backend.connectionChanged.connect(self.devicesChanged)
+
+        # The tray can change settings too: reload when the file changes under us.
+        self._last_saved = CONFIG_PATH.read_text() if CONFIG_PATH.exists() else ""
+        self._watcher = QFileSystemWatcher([str(CONFIG_PATH.parent)], self)
+        if CONFIG_PATH.exists():
+            self._watcher.addPath(str(CONFIG_PATH))
+        self._reload_timer = QTimer(self, singleShot=True, interval=250, timeout=self._external_change)
+        self._watcher.fileChanged.connect(lambda _: self._reload_timer.start())
+        self._watcher.directoryChanged.connect(lambda _: self._reload_timer.start())
 
         self._liveReady.connect(self._on_live)
         self._save_timer = QTimer(self, singleShot=True, interval=300, timeout=self._save)
@@ -247,8 +259,56 @@ class DesktopBridge(QObject):
     def _save(self) -> None:
         try:
             self.cfg.save()
+            self._last_saved = CONFIG_PATH.read_text()
         except OSError as e:
             self.notify.emit(f"Couldn't save desktop settings: {e}", "error")
+
+    def _external_change(self) -> None:
+        if str(CONFIG_PATH) not in self._watcher.files() and CONFIG_PATH.exists():
+            self._watcher.addPath(str(CONFIG_PATH))
+        if self._save_timer.isActive():
+            return  # our own edit is about to be written
+        try:
+            text = CONFIG_PATH.read_text()
+        except OSError:
+            return
+        if text == self._last_saved:
+            return
+        self._last_saved = text
+        self.cfg = DesktopConfig.load()
+        self._changed(bump=True, device=True)
+        self._save_timer.stop()
+        self.devicesChanged.emit()
+
+    # --- overlay settings ----------------------------------------------------------------
+
+    @Property(bool, notify=revisionChanged)
+    def overlay(self) -> bool:
+        return self.cfg.overlay
+
+    @Property(str, notify=revisionChanged)
+    def overlayPosition(self) -> str:
+        return self.cfg.overlay_position
+
+    @Property(bool, notify=revisionChanged)
+    def overlayOverGames(self) -> bool:
+        return self.cfg.overlay_over_games
+
+    @Slot(bool)
+    def setOverlay(self, on: bool) -> None:
+        self.cfg.overlay = on
+        self._changed()
+
+    @Slot(str)
+    def setOverlayPosition(self, pos: str) -> None:
+        if pos in OVERLAY_POSITIONS:
+            self.cfg.overlay_position = pos
+            self._changed()
+
+    @Slot(bool)
+    def setOverlayOverGames(self, on: bool) -> None:
+        self.cfg.overlay_over_games = on
+        self._changed()
 
     @Slot(bool)
     def setOsd(self, on: bool) -> None:
@@ -345,6 +405,8 @@ class DesktopBridge(QObject):
             self.cancelLearn()
         self._device = name
         self._profile = self._service_profile(name)
+        self._group = ""
+        self._auto_template()
         self.deviceChanged.emit()
         self._tick()
 
@@ -462,6 +524,7 @@ class DesktopBridge(QObject):
             "kind": c.kind,
             "mode": c.mode,
             "where": c.describe(),
+            "group": c.group,
             "action": {"type": c.action.type, "target": c.action.target},
         }
 
@@ -571,6 +634,10 @@ class DesktopBridge(QObject):
             c.name = f"{c.kind.capitalize()} {counts[c.kind]}"
             prof.controls.append(c)
             added += 1
+        entry = templates.template_for(self._device)
+        if entry and added:
+            entry[1](prof.controls)  # known device: name and group the new pads straight away
+            self._group = ""
         self._changed(device=True)
         self.devicesChanged.emit()
         self._tick()
@@ -580,6 +647,67 @@ class DesktopBridge(QObject):
             else "Those controls were already learned",
             "positive" if added else "info",
         )
+
+    # --- groups / banks ---------------------------------------------------------------
+
+    @Property("QVariantList", notify=deviceChanged)
+    def groupNames(self) -> list:
+        prof = self._prof()
+        return templates.group_names(prof.controls) if prof else []
+
+    @Property(str, notify=deviceChanged)
+    def currentGroup(self) -> str:
+        names = self.groupNames
+        if names and self._group not in names:
+            self._group = names[0]
+        return self._group if names else ""
+
+    @Slot(str)
+    def setCurrentGroup(self, name: str) -> None:
+        if name != self._group:
+            self._group = name
+            self.deviceChanged.emit()
+
+    @Property(str, notify=deviceChanged)
+    def templateLabel(self) -> str:
+        entry = templates.template_for(self._device)
+        return entry[0] if entry else ""
+
+    def _auto_template(self) -> None:
+        """Known devices (the KO II) get their layout as soon as they have ungrouped pads."""
+        entry = templates.template_for(self._device)
+        prof = self._prof()
+        if entry and prof and prof.controls and not any(c.group for c in prof.controls) and entry[1](prof.controls):
+            self._group = ""
+            self._changed(device=False)
+
+    @Slot()
+    def applyTemplate(self) -> None:
+        entry = templates.template_for(self._device)
+        prof = self._prof()
+        if entry and prof and entry[1](prof.controls):
+            self._group = ""
+            self._changed(device=True)
+            self._tick()
+            self.notify.emit(f"Arranged as {entry[0]}", "positive")
+
+    @Slot(int)
+    def splitBanks(self, size: int) -> None:
+        prof = self._prof()
+        if prof and size > 0:
+            n = templates.split_banks(prof.controls, size)
+            self._group = ""
+            self._changed(device=True)
+            self._tick()
+            self.notify.emit(f"Split the buttons into {n} bank{'s' if n != 1 else ''} of {size}", "positive")
+
+    @Slot()
+    def clearGroups(self) -> None:
+        prof = self._prof()
+        if prof:
+            templates.clear_groups(prof.controls)
+            self._group = ""
+            self._changed(device=True)
 
     def _update_learn(self) -> None:
         if not self._learning:

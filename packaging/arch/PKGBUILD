@@ -4,7 +4,7 @@
 # ../../install.sh do that for you).
 
 pkgname=chimp
-pkgver=0.4.1
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="Use MIDI controllers (LPD8 mk2, KO II, MicroFreak...) to control KDE Plasma, plus a native LPD8 mk2 editor"
 arch=('any')
@@ -21,6 +21,7 @@ depends=(
   'gtk3'             # gtk-launch, for "Launch app" actions
   'systemd'          # busctl, user service
   'hicolor-icon-theme'
+  'layer-shell-qt'   # on-screen overlay above fullscreen windows
 )
 optdepends=(
   'python-pulsectl: in-process volume/mute control (smoother knobs, no polling for pad lights)'

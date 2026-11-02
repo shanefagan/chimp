@@ -27,6 +27,8 @@ Event = tuple[float, list[int]]  # (time in seconds, MIDI bytes)
 
 def _address(msg: list[int]) -> tuple[str, int, int, int] | None:
     """(msg type, channel 1-16, number, value) or None for messages we don't learn."""
+    if len(msg) == 1 and msg[0] in (0xFA, 0xFB, 0xFC):  # start / continue / stop
+        return "rt", 1, msg[0], 127
     if len(msg) < 2:
         return None
     kind, ch = msg[0] & 0xF0, (msg[0] & 0x0F) + 1
@@ -96,7 +98,7 @@ def classify(events: list[Event]) -> list[Control]:
     counters: Counter = Counter()
     for key in sorted(samples, key=lambda k: first_seen[k]):
         msg_type, ch, num = key
-        if msg_type in ("note", "pc"):
+        if msg_type in ("note", "pc", "rt"):
             kind, mode = "button", "momentary"
         elif msg_type == "pb":
             kind, mode = "fader", "absolute"

@@ -32,6 +32,7 @@ ColumnLayout {
         QQC2.ToolTip.visible: hovered
         QQC2.ToolTip.text: "Show Plasma's volume/mute popup, and which program the LPD8 switched to"
     }
+    OverlaySettings { Layout.fillWidth: true }
     QQC2.Switch {
         text: "Pad lights show state"
         checked: desktop.leds

@@ -29,11 +29,11 @@ from .focus import FocusTracker
 from .learn import _address, decode
 from .midi import MidiHub
 from .obs import ObsClient
+from .overlay import OverlayModel
 
 CLIENT_NAME = "Chimp Service"
 LPD8_CLIENT = "LPD8 mk2"
 STATUS_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "chimp.json"
-HINT_INTERVAL_S = 20
 
 
 def log(*args) -> None:
@@ -54,7 +54,7 @@ class DesktopController(QObject):
         self._announced = 0
         self.pad_state = [False] * p.NUM_PADS
         self._last_leds: list | None = None
-        self._last_hint = 0.0
+        self._informed: set[int] = set()  # programs the user has been told about this session
         # Generic devices: active profile index per device (runtime state)
         self.profile_index: dict[str, int] = {}
         self._status: dict = {"pid": os.getpid(), "active": 0, "last": None, "devices": {}}
@@ -64,12 +64,15 @@ class DesktopController(QObject):
         self.obs.connectedChanged.connect(lambda ok: log("OBS", "connected" if ok else "disconnected"))
         self.focus = FocusTracker(self)
         self.focus.changed.connect(self._on_focus)
+        self.overlay = OverlayModel(self, self)  # window created by main() when there's a display
         self.runner = ActionRunner(
             self.obs,
             osd=lambda: self.cfg.osd,
             report=self._report,
             audio_changed=self._poll_audio,
             targets=self.focus.snapshot,
+            feedback=self.overlay.value,
+            level_osd=lambda: not self.overlay.enabled(),
             parent=self,
         )
 
@@ -242,6 +245,8 @@ class DesktopController(QObject):
             return
         who = f"{name} · {c.name}"
         kind, value = what
+        if kind != "release":
+            self.overlay.touch_generic(name, idx, i)
         if kind == "press":
             if c.action.type == "profile_next":
                 self.set_profile(name, idx + 1)
@@ -280,7 +285,11 @@ class DesktopController(QObject):
         self._last_leds = None
         self.pad_state = [False] * p.NUM_PADS
         log(f"LPD8 switched to program {slot}")
-        if previous and self.cfg.osd and slot != self._announced:
+        if previous and slot != self._announced and self.overlay.enabled():
+            self._informed.add(slot)
+            self.overlay.program_switched(slot)
+        elif previous and self.cfg.osd and slot != self._announced:
+            self._informed.add(slot)  # the switch popup already says it's MIDI only
             has = self.cfg.actions(slot).active()
             system.osd_text(
                 "input-keyboard-virtual" if has else "audio-midi",
@@ -332,14 +341,16 @@ class DesktopController(QObject):
         return None
 
     def _maybe_hint(self) -> None:
-        """Pressed something on a program with no actions while another program has some."""
+        """Pressed something on a program with no actions while another program has some.
+
+        Only when we never told the user which program they're on (e.g. the LPD8 was already
+        on it when Chimp started), and only once per program per session: playing music on a
+        MIDI-only program is normal and mustn't keep popping up a reminder."""
         others = self.cfg.slots_with_actions()
-        if not others or not self.cfg.osd or self.cfg.actions(self.active or 1).active():
+        slot = self.active or 1
+        if not others or not self.cfg.osd or self.cfg.actions(slot).active() or slot in self._informed:
             return
-        now = time.monotonic()
-        if now - self._last_hint < HINT_INTERVAL_S:
-            return
-        self._last_hint = now
+        self._informed.add(slot)
         target = others[0]
         system.osd_text(
             "input-keyboard-virtual",
@@ -359,6 +370,7 @@ class DesktopController(QObject):
                 self._maybe_hint()
             return
         if pressed:
+            self.overlay.touch_lpd8(slot, ("pad", slot, i))
             self.runner.press(self.cfg.actions(slot).pads[i], f"Pad {i + 1}")
         else:
             self._release_timer.start()
@@ -380,6 +392,7 @@ class DesktopController(QObject):
             knob = self.programs[slot].knobs[k] if slot in self.programs else None
             lo, hi = (knob.min, knob.max) if knob else (0, 127)
             frac = (value - lo) / (hi - lo) if hi > lo else value / 127
+            self.overlay.touch_lpd8(slot, ("lpd8", slot, k))
             self.runner.level(("lpd8", slot, k), a, frac, value, f"Knob {k + 1}")
             return
         self._pad_event("cc", channel, cc, value > 0)
@@ -408,6 +421,7 @@ class DesktopController(QObject):
                 changed = True
         if changed:
             self._push_leds()
+            self.overlay.refresh_if_shown()
 
     def _sync_obs_state(self) -> None:
         changed = False
@@ -484,6 +498,7 @@ def main() -> int:
                 log("no system tray available; running without an icon")
 
         try_tray()
+        log("overlay", "ready" if ctl.overlay.load() else "unavailable (no layer-shell QML)")
     ctl.start()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: app.quit())
@@ -491,5 +506,6 @@ def main() -> int:
     tick.start()
     app.aboutToQuit.connect(ctl.stop)
     rc = app.exec()
+    ctl.overlay.unload()
     holder.clear()
     return rc

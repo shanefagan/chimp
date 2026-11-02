@@ -32,10 +32,15 @@ class ActionRunner(QObject):
         report: Callable[[str], None],
         audio_changed: Callable[[], None],
         targets: Callable[[], dict] = dict,
+        feedback: Callable[[object, str, int | None], None] | None = None,
+        level_osd: Callable[[], bool] = lambda: True,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._targets = targets
+        self._feedback = feedback  # (control key, label, percent) after a knob/encoder change
+        self._level_osd = level_osd  # Plasma's popup for knob changes (off when the overlay shows them)
+        self._key: object = None
         self.obs = obs
         self._osd = osd
         self._report = report
@@ -68,6 +73,11 @@ class ActionRunner(QObject):
         if pending:
             self._osd_last = time.monotonic()
             pending[0](*pending[1])
+
+    def _done(self, who: str, label: str, pct: int | None, delta: int = 0) -> None:
+        self._report(f"{who} → {label}: " + (f"{pct}%" if pct is not None else f"{delta:+d}"))
+        if self._feedback is not None:
+            self._feedback(self._key, label, pct)
 
     # --- buttons -------------------------------------------------------------------
 
@@ -143,14 +153,16 @@ class ActionRunner(QObject):
     def _flush(self) -> None:
         levels, self._levels = self._levels, {}
         steps, self._steps = self._steps, {}
-        for a, frac, raw, who in levels.values():
+        for key, (a, frac, raw, who) in levels.items():
+            self._key = key
             self._apply_level(a, frac, raw, who)
-        for a, delta, who in steps.values():
+        for key, (a, delta, who) in steps.items():
+            self._key = key
             self._apply_step(a, delta, who)
 
     def _apply_level(self, a: Action, frac: float, raw: int, who: str) -> None:
         pct = round(frac * 100)
-        osd = self._osd()
+        osd = self._osd() and self._level_osd()
         if a.type == "master_volume":
             system.set_volume(system.SINK, frac)
             if osd:
@@ -169,7 +181,7 @@ class ActionRunner(QObject):
                     "audio-volume-high" if pct and streams else "audio-volume-muted",
                     f"{label}: {pct}%" if streams else label,
                 )
-            self._report(f"{who} → {label}: {pct}%")
+            self._done(who, label, pct)
             return
         elif a.type == "brightness":
             system.set_brightness(a.target, frac)
@@ -178,11 +190,11 @@ class ActionRunner(QObject):
             system.run_command(a.target, value=raw, percent=pct, delta=0)
         else:
             return
-        self._report(f"{who} → {describe(a)}: {pct}%")
+        self._done(who, describe(a), pct)
 
     def _apply_step(self, a: Action, delta: int, who: str) -> None:
         change = delta * STEP_PERCENT / 100
-        osd = self._osd()
+        osd = self._osd() and self._level_osd()
         if a.type in ("master_volume", "mic_volume"):
             node = system.SINK if a.type == "master_volume" else system.SOURCE
             vol = system.change_volume(node, change)
@@ -197,7 +209,7 @@ class ActionRunner(QObject):
             pct = round((vol or 0) * 100)
             if osd:
                 self._show(system.osd_text, "audio-volume-high", f"{label}: {pct}%" if streams else label)
-            self._report(f"{who} → {label}: {pct}%")
+            self._done(who, label, pct)
             return
         elif a.type == "brightness":
             current = self._brightness.get(a.target)
@@ -212,4 +224,4 @@ class ActionRunner(QObject):
             pct = None
         else:
             return
-        self._report(f"{who} → {describe(a)}" + (f": {pct}%" if pct is not None else f": {delta:+d}"))
+        self._done(who, describe(a), pct, delta)

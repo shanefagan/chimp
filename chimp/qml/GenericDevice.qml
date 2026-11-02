@@ -60,6 +60,8 @@ ColumnLayout {
             onToggled: desktop.setDeviceEnabled(checked)
         }
         Kirigami.Separator { Layout.fillHeight: true }
+        OverlaySettings {}
+        Kirigami.Separator { Layout.fillHeight: true }
         QQC2.Label { text: "Profile:" }
         QQC2.ComboBox {
             id: profileBox
@@ -172,6 +174,52 @@ ColumnLayout {
                      : "Connect " + desktop.currentDevice + " to learn its controls."
     }
 
+    RowLayout {
+        Layout.fillWidth: true
+        visible: desktop.controlCount > 0 && !desktop.learning
+        spacing: Kirigami.Units.smallSpacing
+        Repeater {
+            model: desktop.groupNames
+            QQC2.TabButton {
+                required property string modelData
+                text: modelData
+                checked: desktop.currentGroup === modelData
+                onClicked: desktop.setCurrentGroup(modelData)
+                Layout.preferredWidth: implicitWidth + Kirigami.Units.largeSpacing * 2
+            }
+        }
+        QQC2.Label {
+            visible: desktop.groupNames.length > 0
+            text: "Groups only organise the tiles: every pad works whichever group the device is on."
+            font: Kirigami.Theme.smallFont
+            opacity: 0.6
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+        }
+        Item { Layout.fillWidth: true }
+        QQC2.ToolButton {
+            text: "Arrange"
+            icon.name: "view-grid"
+            onClicked: arrangeMenu.open()
+            QQC2.Menu {
+                id: arrangeMenu
+                QQC2.MenuItem {
+                    visible: desktop.templateLabel !== ""
+                    height: visible ? implicitHeight : 0
+                    text: "Use layout: " + desktop.templateLabel
+                    onTriggered: desktop.applyTemplate()
+                }
+                QQC2.MenuItem { text: "Split buttons into banks of 8"; onTriggered: desktop.splitBanks(8) }
+                QQC2.MenuItem { text: "Split buttons into banks of 12"; onTriggered: desktop.splitBanks(12) }
+                QQC2.MenuItem { text: "Split buttons into banks of 16"; onTriggered: desktop.splitBanks(16) }
+                QQC2.MenuItem {
+                    text: "No groups"
+                    enabled: desktop.groupNames.length > 0
+                    onTriggered: desktop.clearGroups()
+                }
+            }
+        }
+    }
+
     GridLayout {
         Layout.fillWidth: true
         visible: desktop.controlCount > 0
@@ -185,6 +233,8 @@ ColumnLayout {
                 controlIndex: index
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                visible: desktop.groupNames.length === 0
+                         || (d.group || "Other") === desktop.currentGroup
             }
         }
     }

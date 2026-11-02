@@ -100,3 +100,21 @@ def test_fullscreen_game_detection(tmp_path, monkeypatch):
     # a browser with nothing game-like about its process isn't one
     assert not system.looks_like_game(10**8 + 3, "brave-browser")
     assert not system.looks_like_game(0, "steam_app_1")
+
+
+def test_midi_only_hint_shows_once_and_not_after_switch_popup(monkeypatch):
+    from chimp.desktop import service
+
+    shown = []
+    monkeypatch.setattr(service.system, "osd_text", lambda icon, text: shown.append(text))
+    ctl = DesktopController.__new__(DesktopController)
+    ctl.cfg = DesktopConfig()  # actions on program 4 only
+    ctl._informed = set()
+    ctl.active = 1
+    for _ in range(5):  # started on program 1, keeps playing pads
+        ctl._maybe_hint()
+    assert len(shown) == 1
+    ctl._informed = {2}  # a switch to program 2 was announced
+    ctl.active = 2
+    ctl._maybe_hint()
+    assert len(shown) == 1

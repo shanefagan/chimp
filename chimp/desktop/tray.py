@@ -42,6 +42,12 @@ class Tray(QObject):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.open_editor()
 
+    def _set_overlay(self, on: bool) -> None:
+        self.ctl.cfg.overlay = on
+        self.ctl.cfg.save()  # the service's file watcher reloads it; so does an open editor
+        self._signature = None
+        self.refresh()
+
     # --- what to show ----------------------------------------------------------------
 
     def _lines(self) -> tuple[list[str], bool]:
@@ -82,6 +88,7 @@ class Tray(QObject):
             if n in ctl.cfg.devices and len(ctl.cfg.devices[n].profiles) > 1
         ]
         signature = (
+            ctl.cfg.overlay,
             tuple(lines),
             last,
             ctl.paused,
@@ -114,6 +121,10 @@ class Tray(QObject):
                 group.addAction(act)
                 act.triggered.connect(lambda _=False, n=name, i=i: self.ctl.set_profile(n, i))
         menu.addSeparator()
+        ov = menu.addAction("Show overlay while using a controller")
+        ov.setCheckable(True)
+        ov.setChecked(self.ctl.cfg.overlay)
+        ov.toggled.connect(self._set_overlay)
         pause = menu.addAction("Pause desktop control")
         pause.setCheckable(True)
         pause.setChecked(self.ctl.paused)
