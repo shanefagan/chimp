@@ -87,3 +87,13 @@ def test_lpd8_factory_layout_learns_as_8_knobs_and_8_pads():
     controls = classify(ev)
     assert [c.name for c in controls] == [f"Knob {i}" for i in range(1, 9)] + [f"Button {i}" for i in range(1, 9)]
     assert all(c.mode == "momentary" for c in controls[8:])
+
+
+def test_14bit_knob_nudged_near_centre_is_a_knob_not_an_encoder():
+    # High byte flips between 64 and 65 (repeating, all near 64: encoder-shaped on its own)
+    # while the LSB sweeps; the LSB partner proves it's an absolute 14-bit control.
+    msgs = []
+    for i in range(20):
+        msgs += [cc(1, 1, 64 if i < 6 else 65), cc(1, 33, (i * 6) % 128)]
+    [c] = classify(timeline(msgs))
+    assert (c.kind, c.mode, c.number) == ("knob", "absolute", 1)

@@ -216,7 +216,7 @@ def looks_like_game(pid: int, app_class: str = "") -> bool:
     if not result:
         try:
             env = Path(f"/proc/{pid}/environ").read_bytes()
-            result = any(k in env for k in (b"SteamAppId=", b"SteamGameId=", b"STEAM_COMPAT_APP_ID="))
+            result = any(k in env for k in _STEAM_ID_KEYS)
         except OSError:
             pass
     if not result:
@@ -240,8 +240,29 @@ def pid_alive(pid: int) -> bool:
     return pid > 0 and Path(f"/proc/{pid}").exists()
 
 
+_STEAM_ID_KEYS = (b"SteamAppId=", b"SteamGameId=", b"STEAM_COMPAT_APP_ID=")
+
+
+def steam_app_id(pid: int) -> str:
+    """The Steam app id a process was launched with ("" if none). Every process of a
+    Proton game has it, whichever of them owns the window, the network or the audio."""
+    try:
+        env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError:
+        return ""
+    for key in _STEAM_ID_KEYS:
+        for entry in env:
+            if entry.startswith(key):
+                value = entry[len(key) :].decode(errors="replace")
+                if value and value != "0":
+                    return value
+    return ""
+
+
 def streams_for_pid(pid: int) -> list[dict]:
-    """Playback streams from this process or its children (games often play audio from a child)."""
+    """Playback streams from this process, its children (games often play audio from a
+    child), or, for a Steam/Proton game, any process launched as the same Steam app (under
+    Proton the window's and the audio's processes can be siblings, not parent and child)."""
     if pid <= 0:
         return []
     streams = audio_streams()
@@ -251,6 +272,11 @@ def streams_for_pid(pid: int) -> list[dict]:
     kids = [s for s in streams if s["pid"] and pid in _ancestors(s["pid"])]
     if kids:
         return kids
+    app = steam_app_id(pid)
+    if app:
+        same_app = [s for s in streams if s["pid"] and steam_app_id(s["pid"]) == app]
+        if same_app:
+            return same_app
     name = proc_name(pid).lower()
     return [
         s

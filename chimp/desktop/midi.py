@@ -34,7 +34,9 @@ class MidiHub(QObject):
         self._client_name = client_name
         self._exclude = set(exclude or ())
         self._probe = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA, name=f"{client_name} (probe)")
-        self._open: dict[str, list[rtmidi.MidiIn]] = {}
+        # device -> {port name: open input}. A device only appears here once a port is open;
+        # ports that failed to open (still being set up at hotplug) are retried every scan.
+        self._open: dict[str, dict[str, rtmidi.MidiIn]] = {}
         self._scan_timer = QTimer(self, interval=1500, timeout=self.scan)
         self._drain_timer = QTimer(self, interval=10, timeout=self._drain)
 
@@ -68,35 +70,51 @@ class MidiHub(QObject):
             if name not in present:
                 self._close(name)
                 changed = True
+                continue
+            for port in [p for p in self._open[name] if p not in present[name]]:
+                self._close_port(self._open[name].pop(port))
+            if not self._open[name]:
+                del self._open[name]
+                changed = True
         for name, port_names in present.items():
-            if name not in self._open:
-                self._open_device(name, port_names)
+            have = self._open.get(name, {})
+            missing = [p for p in port_names if p not in have]
+            if missing and self._open_ports(name, missing) and name not in have:
                 changed = True
         if changed:
             self.devicesChanged.emit()
 
-    def _open_device(self, name: str, port_names: list[str]) -> None:
-        opened = []
+    def _open_ports(self, name: str, port_names: list[str]) -> bool:
+        """Open what we can; True if any port opened. The rest are tried again next scan."""
+        opened = False
         for port in port_names:
+            m = None
             try:
                 m = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA, name=self._client_name, queue_size_limit=2048)
                 m.ignore_types(sysex=True, timing=True, active_sense=True)
                 idx = m.get_ports().index(port)
                 m.open_port(idx, f"from {name}"[:60])
-                opened.append(m)
             except (ValueError, rtmidi.SystemError, rtmidi.InvalidPortError):
+                if m is not None:
+                    self._close_port(m)
                 continue
-        self._open[name] = opened
+            self._open.setdefault(name, {})[port] = m
+            opened = True
+        return opened
+
+    @staticmethod
+    def _close_port(m: rtmidi.MidiIn) -> None:
+        with contextlib.suppress(rtmidi.RtMidiError, RuntimeError):
+            m.close_port()
+            m.delete()
 
     def _close(self, name: str) -> None:
-        for m in self._open.pop(name, []):
-            with contextlib.suppress(rtmidi.RtMidiError, RuntimeError):
-                m.close_port()
-                m.delete()
+        for m in self._open.pop(name, {}).values():
+            self._close_port(m)
 
     def _drain(self) -> None:
         for name, ports in list(self._open.items()):
-            for m in ports:
+            for m in list(ports.values()):
                 for _ in range(256):
                     try:
                         item = m.get_message()

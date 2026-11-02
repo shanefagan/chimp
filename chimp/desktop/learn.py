@@ -11,7 +11,8 @@ Move every knob/fader through its range and press every button a couple of times
   around 64 (63/65, 62/66, ...)    -> relative encoder, "64 +/- n" style
   near 1 or 127 (1, 2 / 127, 126)  -> relative encoder, two's-complement style
 - any other CC                     -> knob (absolute position)
-- CC 32-63 that shadow CC 0-31     -> dropped (14-bit LSB of another control)
+- CC 32-63 that shadow CC 0-31     -> dropped (14-bit LSB of another control), and
+                                      the control they belong to is a knob
 - aftertouch / pressure            -> ignored
 """
 
@@ -88,11 +89,15 @@ def classify(events: list[Event]) -> list[Control]:
         first_seen.setdefault(key, t)
         samples.setdefault(key, []).append((t, value))
 
-    # 14-bit CC pairs: CC n+32 carries the low bits of CC n; keep only the main one.
+    # 14-bit CC pairs: CC n+32 carries the low bits of CC n; keep only the main one, and
+    # remember it was 14-bit: that makes it an absolute control even if a small nudge
+    # only moved the high byte between 64 and 65, which would look like an encoder.
+    fourteen_bit: set[tuple] = set()
     for key in list(samples):
         msg_type, ch, num = key
         if msg_type == "cc" and 32 <= num <= 63 and ("cc", ch, num - 32) in samples:
             del samples[key]
+            fourteen_bit.add(("cc", ch, num - 32))
 
     controls: list[Control] = []
     counters: Counter = Counter()
@@ -102,6 +107,8 @@ def classify(events: list[Event]) -> list[Control]:
             kind, mode = "button", "momentary"
         elif msg_type == "pb":
             kind, mode = "fader", "absolute"
+        elif key in fourteen_bit:
+            kind, mode = "knob", "absolute"
         else:
             kind, mode = _cc_kind(samples[key])
         counters[kind] += 1

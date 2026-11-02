@@ -3,19 +3,19 @@
 - Focus: a tiny KWin script reports every window activation / fullscreen change to
   this service over D-Bus (com.performativenonsense.chimp.service). Plasma Wayland gives no other way to
   ask for the active window's process.
-- Game: bpfrag's read-only system-bus interface (GamePid during a match). It knows
-  real games by their traffic and Steam app id, so a fullscreen video doesn't count.
+- Game: bpfrag's read-only system-bus interface. It knows real games by their traffic
+  and Steam app id, so a fullscreen video doesn't count. Followed with signals, not
+  polling: StateChanged carries the game in a menu too (GamePid stays 0 until a match).
 """
 
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import ClassInfo, QObject, QTimer, Signal, Slot
-from PySide6.QtDBus import QDBusConnection
+from PySide6.QtCore import ClassInfo, QObject, Signal, Slot
+from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusVariant
 
 from . import system
 
@@ -44,6 +44,7 @@ report(workspace.activeWindow);
 """
 
 BPFRAG = ("com.performativenonsense.Bpfrag1", "/com/performativenonsense/Bpfrag1")
+BPFRAG_IFACE = BPFRAG[0]
 
 
 @ClassInfo({"D-Bus Interface": BUS_NAME})
@@ -58,6 +59,33 @@ class _Endpoint(QObject):
             self._tracker._on_window(int(pid or 0), fullscreen == "1", app)
 
 
+def _plain(v):
+    while isinstance(v, QDBusVariant):
+        v = v.variant()
+    return v
+
+
+class _BpfragListener(QObject):
+    """Slots for bpfrag's system-bus signals (kept off the session-bus endpoint)."""
+
+    def __init__(self, tracker: FocusTracker) -> None:
+        super().__init__(tracker)
+        self._tracker = tracker
+
+    @Slot(str, "QVariantMap")
+    def stateChanged(self, state: str, info: dict) -> None:
+        self._tracker._on_bpfrag_state(state, {k: _plain(v) for k, v in dict(info).items()})
+
+    @Slot(str, str, str)
+    def nameOwnerChanged(self, name: str, _old: str, new: str) -> None:
+        if name != BPFRAG[0]:
+            return
+        if new:  # bpfrag (re)started
+            self._tracker._read_bpfrag()
+        else:
+            self._tracker._set_bpfrag(0, "")
+
+
 class FocusTracker(QObject):
     changed = Signal()
 
@@ -68,7 +96,7 @@ class FocusTracker(QObject):
         self.bpfrag_game: dict = {"pid": 0, "name": ""}
         self._endpoint = _Endpoint(self)
         self._ok = False
-        self._bpfrag_timer = QTimer(self, interval=2000, timeout=self._poll_bpfrag)
+        self._bpfrag_listener = _BpfragListener(self)
 
     def start(self) -> None:
         bus = QDBusConnection.sessionBus()
@@ -76,11 +104,9 @@ class FocusTracker(QObject):
             "/", self._endpoint, QDBusConnection.RegisterOption.ExportAllSlots
         ):
             self._ok = self._load_script()
-        self._poll_bpfrag()
-        self._bpfrag_timer.start()
+        self._follow_bpfrag()
 
     def stop(self) -> None:
-        self._bpfrag_timer.stop()
         system.run(
             [
                 "busctl",
@@ -122,27 +148,60 @@ class FocusTracker(QObject):
             self.focused = new
             self.changed.emit()
 
-    def _poll_bpfrag(self) -> None:
-        out = system.run(
-            [
-                "busctl",
-                "--system",
-                "--json=short",
-                "get-property",
-                *BPFRAG,
-                "com.performativenonsense.Bpfrag1",
-                "GamePid",
-                "Game",
-            ],
-            timeout=1.0,
+    def _follow_bpfrag(self) -> None:
+        bus = QDBusConnection.systemBus()
+        if not bus.isConnected():
+            return
+        bus.connect(
+            BPFRAG[0],
+            BPFRAG[1],
+            BPFRAG_IFACE,
+            "StateChanged",
+            self._bpfrag_listener,
+            "2stateChanged(QString,QVariantMap)",
         )
-        pid, name = 0, ""
+        bus.connect(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameOwnerChanged",
+            self._bpfrag_listener,
+            "2nameOwnerChanged(QString,QString,QString)",
+        )
+        self._read_bpfrag()
+
+    def _read_bpfrag(self) -> None:
+        """At start and when bpfrag (re)starts. Mid-match the properties name the game; in a
+        menu they don't (only StateChanged does), so a game already in its menu is picked
+        up at its next state change, or by focus meanwhile."""
+        props = QDBusInterface(BPFRAG[0], BPFRAG[1], "org.freedesktop.DBus.Properties", QDBusConnection.systemBus())
+        props.setTimeout(1000)
+
+        def get(name: str):
+            args = props.call("Get", BPFRAG_IFACE, name).arguments()
+            return _plain(args[0]) if args else None
+
+        state = get("State")
+        if state == "match":
+            with contextlib.suppress(TypeError, ValueError):
+                self._set_bpfrag(int(get("GamePid") or 0), str(get("Game") or ""))
+        elif state == "idle" or state is None:
+            self._set_bpfrag(0, "")
+
+    def _on_bpfrag_state(self, state: str, info: dict) -> None:
+        if state == "idle":
+            self._set_bpfrag(0, "")
+            return
         try:
-            # get-property with two names prints one JSON object per line
-            lines = [json.loads(line)["data"] for line in out.splitlines() if line.strip()]
-            pid, name = int(lines[0]), str(lines[1])
-        except (ValueError, KeyError, IndexError, TypeError):
-            pass
+            pid = int(info.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid:  # menu or match: the game, with its pid even in a menu
+            self._set_bpfrag(pid, str(info.get("game") or ""))
+        else:
+            self._read_bpfrag()
+
+    def _set_bpfrag(self, pid: int, name: str) -> None:
         new = {"pid": pid, "name": name}
         if new != self.bpfrag_game:
             self.bpfrag_game = new
