@@ -4,7 +4,7 @@
 # ../../install.sh do that for you).
 
 pkgname=chimp
-pkgver=0.5.0
+pkgver=0.5.1
 pkgrel=1
 pkgdesc="Use MIDI controllers (LPD8 mk2, KO II, MicroFreak...) to control KDE Plasma, plus a native LPD8 mk2 editor"
 arch=('any')

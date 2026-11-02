@@ -4,8 +4,14 @@ import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
 
 // Settings for the on-screen overlay that shows the controller while you use it.
-RowLayout {
-    spacing: Kirigami.Units.largeSpacing
+// `vertical` stacks them for narrow places like the LPD8 page's left column.
+GridLayout {
+    id: settings
+    property bool vertical: false
+
+    columns: vertical ? 1 : 3
+    columnSpacing: Kirigami.Units.largeSpacing
+    rowSpacing: Kirigami.Units.smallSpacing
 
     QQC2.Switch {
         text: "Overlay"
@@ -16,6 +22,8 @@ RowLayout {
                            + "while you use it. Replaces Plasma's volume popups for knobs."
     }
     QQC2.ComboBox {
+        Layout.fillWidth: settings.vertical
+        Layout.leftMargin: settings.vertical ? Kirigami.Units.gridUnit * 2 : 0
         enabled: desktop.overlay
         model: [
             {value: "bottom", label: "Bottom"},
@@ -29,6 +37,7 @@ RowLayout {
         onActivated: desktop.setOverlayPosition(currentValue)
     }
     QQC2.CheckBox {
+        Layout.leftMargin: settings.vertical ? Kirigami.Units.gridUnit * 2 : 0
         enabled: desktop.overlay
         text: "Over fullscreen games"
         checked: desktop.overlayOverGames

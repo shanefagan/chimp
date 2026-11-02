@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize
+from PySide6.QtCore import QObject, QSize, QTimer
 from PySide6.QtGui import QActionGroup, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -124,11 +124,13 @@ class Tray(QObject):
         ov = menu.addAction("Show overlay while using a controller")
         ov.setCheckable(True)
         ov.setChecked(self.ctl.cfg.overlay)
-        ov.toggled.connect(self._set_overlay)
+        # Changing settings rebuilds this menu: do it after the click has finished, not
+        # inside the action's own signal (deleting the action that's firing is unsafe).
+        ov.toggled.connect(lambda on: QTimer.singleShot(0, lambda: self._set_overlay(on)))
         pause = menu.addAction("Pause desktop control")
         pause.setCheckable(True)
         pause.setChecked(self.ctl.paused)
-        pause.toggled.connect(self.ctl.set_paused)
+        pause.toggled.connect(lambda on: QTimer.singleShot(0, lambda: self.ctl.set_paused(on)))
         menu.addAction(QIcon.fromTheme("chimp", self._base), "Open editor", self.open_editor)
         menu.addSeparator()
         menu.addAction(QIcon.fromTheme("application-exit"), "Quit until next login", QApplication.quit)
