@@ -40,6 +40,14 @@ Window {
     readonly property color dim: "#9aa0aa"
     readonly property color accent: "#3d8bff"
 
+    // Text on a pad is whichever of near-black or white contrasts more with the pad's
+    // colour (WCAG relative luminance), so any pad colour, lit or not, stays readable.
+    function luminance(c) {
+        const ch = v => v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+        return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b)
+    }
+    function inkFor(c) { return luminance(c) > 0.179 ? "#111216" : "#ffffff" }
+
     Rectangle {
         id: card
         x: 1
@@ -158,20 +166,35 @@ Window {
         implicitHeight: 64
         radius: 12
         readonly property bool lit: d.pressed || d.on
-        color: lit ? d.onColor : Qt.darker(d.offColor, 1.6)
-        border.color: d.pressed ? "#ffffff" : "#22ffffff"
-        border.width: d.pressed ? 2 : 1
+        readonly property color fill: lit ? d.onColor : Qt.darker(d.offColor, 1.6)
+        readonly property color ink: win.inkFor(fill)
+        // A black or near-black pad would vanish into the dark card: give it a visible edge.
+        readonly property bool nearBlack: win.luminance(fill) < 0.03
+        color: fill
+        border.color: nearBlack ? "#59ffffff" : Qt.rgba(ink.r, ink.g, ink.b, 0.18)
+        border.width: 1
         opacity: d.active ? 1 : 0.45
         Behavior on color { ColorAnimation { duration: 80 } }
+        // Pressed: a white ring just outside the tile. The card behind is always dark, so
+        // it shows whatever the pad's colour (an outline on the tile itself can't).
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -4
+            radius: parent.radius + 4
+            color: "transparent"
+            border.color: "#ffffff"
+            border.width: 2
+            visible: d.pressed
+        }
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 8
             spacing: 2
-            Text { text: d.name; color: "#ccffffff"; font.pixelSize: 11; font.bold: true }
+            Text { text: d.name; color: Qt.rgba(ink.r, ink.g, ink.b, 0.75); font.pixelSize: 11; font.bold: true }
             Text {
                 Layout.fillWidth: true
                 text: d.label || "—"
-                color: "#ffffff"
+                color: ink
                 font.pixelSize: 14
                 font.bold: true
                 elide: Text.ElideRight
