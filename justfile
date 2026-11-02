@@ -21,10 +21,12 @@ default:
 
 # ---- develop -------------------------------------------------------------
 
-# Dev venv on top of the system PySide6/Kirigami, editable install + dev tools
+# Dev venv on top of the system PySide6, Kirigami and python-rtmidi, editable install + dev tools
 dev:
     test -x {{ python }} || uv venv --system-site-packages --python /usr/bin/python3 .venv
-    uv pip install --python {{ python }} -e . --group dev
+    @{{ python }} -c "import rtmidi" 2>/dev/null || { echo "python-rtmidi missing: install it from the distribution (pacman: python-rtmidi, apt: python3-rtmidi)"; exit 1; }
+    uv pip install --python {{ python }} --no-deps -e .
+    uv pip install --python {{ python }} --group dev
 
 # Run the editor from the source tree
 run *args:

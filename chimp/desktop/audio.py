@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 try:
     import pulsectl
-except ImportError:  # optional dependency
+except (ImportError, OSError):  # optional; OSError: installed, but libpulse isn't
     pulsectl = None
 
 _local = threading.local()
