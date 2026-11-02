@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chimp
+GenericName=MIDI Controller Editor
+Comment=Use MIDI controllers (LPD8 mk2, KO II, MicroFreak, ...) to control your desktop; edit LPD8 mk2 programs
+Exec=chimp
+Icon=chimp
+Terminal=false
+Categories=AudioVideo;Audio;Midi;Settings;
+Keywords=akai;lpd8;midi;pads;sysex;volume;obs;desktop;controller;knob;ko;microfreak;
+StartupWMClass=chimp

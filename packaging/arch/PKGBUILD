@@ -1,0 +1,55 @@
+# Maintainer: Shane Fagan <shanepatrickfagan@gmail.com>
+#
+# Local package. Run ./make-source.sh first to pack the source tree (`just pkg` and
+# ../../install.sh do that for you).
+
+pkgname=chimp
+pkgver=0.4.1
+pkgrel=1
+pkgdesc="Use MIDI controllers (LPD8 mk2, KO II, MicroFreak...) to control KDE Plasma, plus a native LPD8 mk2 editor"
+arch=('any')
+license=('MIT')
+depends=(
+  'python'
+  'pyside6'          # Qt Quick, QtDBus, QtWebSockets bindings
+  'qt6-declarative'  # QtQuick runtime for the QML UI
+  'qt6-websockets'   # OBS WebSocket client
+  'kirigami'         # UI components
+  'python-rtmidi'    # ALSA sequencer MIDI
+  'pipewire'         # pw-dump
+  'wireplumber'      # wpctl (fallback volume control)
+  'gtk3'             # gtk-launch, for "Launch app" actions
+  'systemd'          # busctl, user service
+  'hicolor-icon-theme'
+)
+optdepends=(
+  'python-pulsectl: in-process volume/mute control (smoother knobs, no polling for pad lights)'
+  'obs-studio: OBS scene/record/stream/mute actions'
+  'bpfrag: Game volume knob follows the game bpfrag detects in a match'
+)
+conflicts=('lpd8mk2-editor' 'knobdeck')
+replaces=('lpd8mk2-editor' 'knobdeck')
+makedepends=('python-build' 'python-installer' 'python-hatchling')
+checkdepends=('python-pytest')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  PYTHONPATH="$PWD" python -m pytest -q -p no:cacheprovider tests/test_*.py
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/chimp.desktop "$pkgdir/usr/share/applications/chimp.desktop"
+  install -Dm644 chimp/icons/chimp.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/chimp.svg"
+  install -Dm644 packaging/chimp.service "$pkgdir/usr/lib/systemd/user/chimp.service"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

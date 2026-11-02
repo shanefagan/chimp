@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chimp"
+version = "0.4.1"
+description = "Use MIDI controllers (Akai LPD8 mk2, KO II, MicroFreak, ...) to control a KDE Plasma desktop, plus a native LPD8 mk2 editor"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+keywords = ["midi", "lpd8", "kde", "plasma", "pipewire", "controller"]
+classifiers = [
+    "Environment :: X11 Applications :: KDE",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+]
+# PySide6 and Kirigami come from the system (pacman: pyside6, kirigami): the Kirigami
+# QML plugins are built against the system Qt, so a PyPI PySide6 can't load them.
+dependencies = ["python-rtmidi>=1.5"]
+
+[project.optional-dependencies]
+# In-process volume/mute control and mute events; without it wpctl is used.
+pulse = ["pulsectl>=24"]
+
+[project.gui-scripts]
+chimp = "chimp.app:main"
+
+[project.scripts]
+chimpd = "chimp.desktop.service:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.7", "bandit>=1.7", "pulsectl>=24"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["chimp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["chimp", "tests", "packaging/*.desktop", "packaging/*.service", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # import order
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "SIM",          # simplifications
+    "RUF",          # ruff-specific
+    "BLE",          # blind except
+    "S",            # bandit rules (bandit itself also runs, see justfile)
+    "PIE", "C4", "RET", "PTH",
+]
+ignore = [
+    "S603", "S607",  # subprocess with argument lists and PATH tools (wpctl, busctl...) is the design
+    "S404",          # importing subprocess
+    "RET504", "RET505",
+    "SIM108",        # ternaries aren't always clearer
+    "RUF001", "RUF003",  # typographic characters in UI strings are intended
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S108", "BLE001", "PTH", "E501"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+# B404/B603/B607: we run PipeWire/D-Bus tools by name with argument lists, never a shell
+# built from untrusted input. User-configured commands are deliberate (see run_command).
+skips = ["B404", "B603", "B607"]

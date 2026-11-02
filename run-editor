@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Launcher: runs the editor from its own venv (python-rtmidi) on top of the system PySide6.
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+cd "$DIR"
+if [[ ! -x .venv/bin/python ]]; then
+    uv venv --system-site-packages --python /usr/bin/python3 .venv
+    uv pip install --python .venv/bin/python python-rtmidi
+fi
+exec .venv/bin/python -m chimp "$@"

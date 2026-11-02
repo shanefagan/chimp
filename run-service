@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Desktop-control service: runs headless, normally started by the systemd user unit.
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+cd "$DIR"
+if [[ ! -x .venv/bin/python ]]; then
+    uv venv --system-site-packages --python /usr/bin/python3 .venv
+    uv pip install --python .venv/bin/python python-rtmidi
+fi
+exec .venv/bin/python -u -m chimp.desktop "$@"
