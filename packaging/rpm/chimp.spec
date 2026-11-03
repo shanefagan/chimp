@@ -35,6 +35,7 @@ BuildRequires:  python3-pip
 BuildRequires:  python3-pytest
 BuildRequires:  python3-pyside6
 BuildRequires:  python3-numpy
+BuildRequires:  python3-pyyaml
 BuildRequires:  desktop-file-utils
 # python-rtmidi
 BuildRequires:  gcc-c++

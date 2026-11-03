@@ -21,8 +21,8 @@ classifiers = [
 ]
 # PySide6 and Kirigami come from the system (pacman: pyside6, kirigami): the Kirigami
 # QML plugins are built against the system Qt, so a PyPI PySide6 can't load them.
-# numpy: Chimp Loop's mixer.
-dependencies = ["python-rtmidi>=1.5.8", "numpy>=1.24"]
+# numpy: Chimp Loop's mixer. PyYAML: its kit files (kit.yaml).
+dependencies = ["python-rtmidi>=1.5.8", "numpy>=1.24", "PyYAML>=5.4"]
 
 [project.optional-dependencies]
 # In-process volume/mute control and mute events; without it wpctl is used.

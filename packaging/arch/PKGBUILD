@@ -17,6 +17,7 @@ depends=(
   'kirigami'         # UI components
   'python-rtmidi'    # ALSA sequencer MIDI
   'python-numpy'     # Chimp Loop's mixer
+  'python-yaml'      # Chimp Loop's kit files
   'qt6-multimedia'   # Chimp Loop's audio output
   'pipewire'         # pw-dump
   'wireplumber'      # wpctl (fallback volume control)

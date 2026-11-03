@@ -9,11 +9,13 @@ import os
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices
 
 from ..desktop.midi import MidiHub
 from ..desktop.service import LPD8_CLIENT, STATUS_PATH
 from . import dsp, files, voice
+from . import kit as kits
 from .engine import (
     KNOB_PAGES,
     MASTER_CHOICES,
@@ -91,6 +93,11 @@ class LoopController(QObject):
         self._status_timer = QTimer(self, interval=400, timeout=self._poll_status)
         # Knob sweeps change parameters many times a second: save once they settle.
         self._save_later = QTimer(self, singleShot=True, interval=1500, timeout=self._save_settings)
+        # Kit folders added or removed by hand show up in the list without a restart.
+        self._kit_watch = QFileSystemWatcher(self)
+        self._kit_watch.directoryChanged.connect(lambda _path: self._rescan_later.start())
+        self._rescan_later = QTimer(self, singleShot=True, interval=600, timeout=self._rescan_kits)
+        self._watch_kits()
 
     def start(self) -> None:
         self._poll_status()
@@ -130,6 +137,153 @@ class LoopController(QObject):
         self.e.set_kit(kit)
         self._kit_name = name
         self.s.kit = name
+
+    # --- kits on disk -------------------------------------------------------------------
+
+    def _watch_kits(self) -> None:
+        with contextlib.suppress(OSError):
+            kits.USER_DIR.mkdir(parents=True, exist_ok=True)
+        want = [str(kits.USER_DIR)] + [str(d) for d in kits.kit_dirs()]
+        have = self._kit_watch.directories()
+        if gone := [d for d in have if d not in want]:
+            self._kit_watch.removePaths(gone)
+        if new := [d for d in want if d not in have and Path(d).is_dir()]:
+            self._kit_watch.addPaths(new)
+
+    def _rescan_kits(self, select: str = "") -> None:
+        """Re-read the kit list; `select` loads that kit, else the current one stays."""
+        self._watch_kits()
+        names = kit_names()
+        if select in names:
+            self._kits = names
+            self._load_kit(names.index(select))
+            self._save_settings()
+        elif names != self._kits:
+            self._kits = names
+            if self._kit_name not in names:  # its folder went away
+                self._load_kit(0)
+                self._save_settings()
+        else:
+            return
+        self.changed.emit()
+
+    @staticmethod
+    def _path(url: QUrl | str) -> Path:
+        u = QUrl(url)
+        return Path(u.toLocalFile() if u.isLocalFile() else str(url))
+
+    @Property(str, constant=True)
+    def kitsFolder(self) -> str:
+        return str(kits.USER_DIR)
+
+    @Property(bool, notify=changed)
+    def kitIsBuiltIn(self) -> bool:
+        return self._kit_name == kits.BUILTIN
+
+    @Slot()
+    def openKitsFolder(self) -> None:
+        self._watch_kits()
+        target = kits.USER_DIR / self._kit_name if self._kit_name != kits.BUILTIN else kits.USER_DIR
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target if target.is_dir() else kits.USER_DIR)))
+
+    @Slot("QVariant")
+    def importKit(self, url) -> None:
+        """A folder of WAVs, a .chimpkit or a .zip becomes one of your kits, and is selected."""
+        src = self._path(url)
+        try:
+            name = kits.import_kit(src)
+        except (OSError, ValueError) as exc:
+            self.notify.emit(f"Couldn't import {src.name}: {exc}")
+            return
+        self._rescan_kits(select=name)
+        n = sum(1 for s in self.e.kit.sounds if s) if self.e.kit else 0
+        self.notify.emit(f"Imported kit {name} ({n} sounds)")
+
+    @Slot(str)
+    def newKit(self, name: str) -> None:
+        """An empty kit to fill pad by pad (Sample…, or drop WAVs on the pads)."""
+        try:
+            kit = kits.new_kit(name.strip() or "new kit")
+        except OSError as exc:
+            self.notify.emit(f"Couldn't make a kit: {exc}")
+            return
+        self._rescan_kits(select=kit)
+        self.notify.emit(f"New kit {kit}: drop WAVs on the pads, or Sample… on a pad")
+
+    @Property(str, notify=changed)
+    def kitName(self) -> str:
+        return self._kit_name
+
+    @Property(QUrl, notify=changed)
+    def kitExportUrl(self) -> QUrl:
+        """Where Export suggests saving the current kit."""
+        with contextlib.suppress(OSError):
+            files.EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        return QUrl.fromLocalFile(str(files.EXPORT_DIR / f"{self._kit_name}{kits.EXTENSION}"))
+
+    @Slot("QVariant")
+    def exportKit(self, url) -> None:
+        dest = self._path(url)
+        try:
+            out = kits.export_kit(self._kit_name, dest, self.e.rate)
+        except (OSError, ValueError) as exc:
+            self.notify.emit(f"Couldn't export {self._kit_name}: {exc}")
+            return
+        self.notify.emit(f"Saved {out.name}")
+
+    def _edit(self, what: str, fn) -> bool:
+        """Run a kit edit (fn(kit) -> kit it went into), reload, say where it went."""
+        was = self._kit_name
+        try:
+            name = fn(was)
+        except (OSError, ValueError) as exc:
+            self.notify.emit(f"Couldn't {what}: {exc}")
+            return False
+        self._rescan_kits(select=name)
+        if name != self._kit_name:  # the edited kit wouldn't load: _load_kit said why
+            return False
+        if name != was:
+            self.notify.emit(f"Editing {name}, a copy of {was} (the built-in kit stays as it is)")
+        return True
+
+    @Slot("QVariant")
+    def replaceSample(self, url) -> None:
+        self.replacePadSample(self.e.selected, url)
+
+    @Slot(int, "QVariant")
+    def replacePadSample(self, pad: int, url) -> None:
+        """Put a WAV on a pad. The built-in kit is copied to an editable kit of yours first."""
+        src = self._path(url)
+        copying = self.kitIsBuiltIn
+        if self._edit(f"use {src.name}", lambda k: kits.replace_sample(k, pad, src, self.e.rate)) and not copying:
+            self.notify.emit(f"{src.stem} → pad {pad + 1}")
+
+    @Slot(int, str)
+    def renamePad(self, pad: int, label: str) -> None:
+        if label.strip():
+            self._edit("rename the pad", lambda k: kits.rename_pad(k, pad, label, self.e.rate))
+
+    @Slot(int)
+    def clearPad(self, pad: int) -> None:
+        self._edit("clear the pad", lambda k: kits.clear_pad(k, pad, self.e.rate))
+
+    @Slot("QVariant")
+    def dropped(self, urls) -> None:
+        """Files dropped on the window: kits import, a WAV goes on the selected pad."""
+        self.droppedOnPad(self.e.selected, urls)
+
+    @Slot(int, "QVariant")
+    def droppedOnPad(self, pad: int, urls) -> None:
+        """Folders, .chimpkit and .zip files import as kits; otherwise the first WAV goes on `pad`."""
+        paths = [self._path(u) for u in (urls or [])]
+        packs = [p for p in paths if p.is_dir() or (p.is_file() and p.suffix.lower() in (kits.EXTENSION, ".zip"))]
+        wavs = [p for p in paths if p.is_file() and p.suffix.lower() == ".wav"]
+        for f in packs:
+            self.importKit(str(f))
+        if wavs and not packs:
+            self.replacePadSample(pad, str(wavs[0]))
+        elif not packs:
+            self.notify.emit(f"Drop a kit (a folder of WAVs, a {kits.EXTENSION} or a .zip) or a WAV for a pad")
 
     def _save_settings(self) -> None:
         with self.e.lock:

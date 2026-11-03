@@ -165,10 +165,38 @@ pads** maps any pad to any sound; **Controller buttons…** gives record, play, 
 quantise, metronome, next kit and knob page to buttons on a controller. Keys: Z X C V, A S D F,
 Q W E R, 1 2 3 4 play the sounds as laid out on screen.
 
-**Kits:** two are bundled (`drums1`, `drums2`). Add your own as a folder of WAVs in
-`~/.local/share/chimp/kits/<name>/`. Files named `kick`, `snare_1`, `clap`, `hihat_1`,
+**Kits:** the built-in kit, **synth**, is synthesised when Chimp Loop starts (analog drum
+machine recipes: swept-sine kick and toms, six-square-wave hats and cymbals, cowbell,
+claves); no samples ship with Chimp. Your kits live in `~/.local/share/chimp/kits/<name>/`:
+
+- **Import…** a folder of WAVs (sample packs with one sound per sub-folder work too), a
+  `.chimpkit` or a `.zip`, or drop one on the window. Everything is copied in.
+- **New empty kit…** (the ☰ menu by the kit list), then fill it pad by pad: **Sample…** on
+  the selected pad, or drop a WAV on a pad. Rename or empty a pad from the pad editor.
+- Change a pad on the built-in kit and you get an editable copy (**synth custom**); the
+  built-in stays as it is. A sample you replace is moved to the kit's `replaced/` folder,
+  never deleted.
+- **Export … as .chimpkit** puts the kit in one file to share: the folder, zipped.
+
+Reads 8/16/24/32-bit PCM and 32/64-bit float WAVs, any rate. A kit folder's `kit.yaml`
+says what's on each pad:
+
+```yaml
+format: chimp-kit
+version: 1
+name: Heavy
+pads:
+- pad: 1
+  file: kick.wav      # a WAV in the same folder
+  label: Kick         # optional: the file's name
+  note: 36            # optional: General MIDI note for MIDI export
+```
+
+A folder without one is read by file name: `kick`, `snare_1`, `clap`, `hihat_1`,
 `open_hihat`, `rim`, `tom_1`, `crash`, `snare_2`, `hihat_2`, `tom_2`, `tom_3`, `ride`,
-`perc_1`, `perc_2` and `perc_3` go to those slots; others fill the gaps.
+`perc_1`, `perc_2` and `perc_3` go to those pads, other WAVs fill the gaps; it gets a
+`kit.yaml` the first time you edit it. New folders show up in the list by themselves.
+Samples are kept out of the repository (`.gitignore`).
 
 **Save** loops (`~/.local/share/chimp/loops/`, with every pad and master setting), and
 **export** to `~/Music/Chimp/`:

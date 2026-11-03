@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QQC2
+import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
 
 // Chimp Loop: a drum machine for any controller. Live looping and step entry on one
@@ -21,6 +22,7 @@ Kirigami.ApplicationWindow {
         return { empty: "Ready", recording: "Recording", playing: "Playing", overdub: "Overdubbing", stopped: "Stopped" }[s] || s
     }
     readonly property bool typing: saveName.activeFocus || exportName.activeFocus || soundName.activeFocus
+                                   || newKitName.activeFocus || padNameField.activeFocus
     property string view: "steps"  // "steps" or "pads"
     readonly property var holdKeys: ({ "G": "roll", "5": "g.stutter4", "6": "g.stutter8", "7": "g.stutter16",
                                        "8": "g.stutter32", "9": "g.tapestop", "0": "g.reverse", "-": "g.half" })
@@ -308,6 +310,46 @@ Kirigami.ApplicationWindow {
                             currentIndex: loop.kitIndex
                             onActivated: loop.setKit(currentIndex)
                         }
+                        QQC2.ToolButton {
+                            focusPolicy: Qt.NoFocus
+                            icon.name: "document-import"
+                            text: "Import…"
+                            onClicked: kitFolderDialog.open()
+                            QQC2.ToolTip.text: "Import a kit: a folder of WAVs (or drop a folder, .chimpkit or .zip on the window)"
+                            QQC2.ToolTip.visible: hovered
+                        }
+                        QQC2.ToolButton {
+                            id: kitMenuButton
+                            focusPolicy: Qt.NoFocus
+                            icon.name: "application-menu"
+                            onClicked: kitMenu.popup(kitMenuButton, 0, kitMenuButton.height)
+                            QQC2.ToolTip.text: "More for kits"
+                            QQC2.ToolTip.visible: hovered && !kitMenu.visible
+                            QQC2.Menu {
+                                id: kitMenu
+                                QQC2.MenuItem {
+                                    icon.name: "list-add"
+                                    text: "New empty kit…"
+                                    onTriggered: { newKitName.text = ""; newKitDialog.open() }
+                                }
+                                QQC2.MenuItem {
+                                    icon.name: "document-import"
+                                    text: "Import a kit file (.chimpkit, .zip)…"
+                                    onTriggered: kitFileDialog.open()
+                                }
+                                QQC2.MenuItem {
+                                    icon.name: "document-export"
+                                    text: "Export " + loop.kitName + " as .chimpkit…"
+                                    onTriggered: { kitExportDialog.selectedFile = loop.kitExportUrl; kitExportDialog.open() }
+                                }
+                                QQC2.MenuSeparator {}
+                                QQC2.MenuItem {
+                                    icon.name: "folder-open"
+                                    text: "Open kits folder"
+                                    onTriggered: loop.openKitsFolder()
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -567,6 +609,19 @@ Kirigami.ApplicationWindow {
                                 }
                                 onReleased: loop.padUp(bp.sound)
                             }
+                            DropArea {
+                                id: bpDrop
+                                anchors.fill: parent
+                                onDropped: (drop) => { loop.droppedOnPad(bp.sound, drop.urls); drop.accept() }
+                            }
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: parent.radius
+                                visible: bpDrop.containsDrag
+                                color: "transparent"
+                                border.width: 3
+                                border.color: Kirigami.Theme.highlightColor
+                            }
                             ColumnLayout {
                                 anchors.fill: parent
                                 anchors.margins: Kirigami.Units.smallSpacing * 2
@@ -679,6 +734,19 @@ Kirigami.ApplicationWindow {
                                     }
                                     onReleased: loop.padUp(pad.sound)
                                 }
+                                DropArea {
+                                    id: padDrop
+                                    anchors.fill: parent
+                                    onDropped: (drop) => { loop.droppedOnPad(pad.sound, drop.urls); drop.accept() }
+                                }
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: parent.radius
+                                    visible: padDrop.containsDrag
+                                    color: "transparent"
+                                    border.width: 3
+                                    border.color: Kirigami.Theme.highlightColor
+                                }
                             }
                         }
                     }
@@ -702,6 +770,32 @@ Kirigami.ApplicationWindow {
                                 Kirigami.Heading {
                                     level: 4
                                     text: "Pad " + (loop.selectedSound + 1) + " · " + (loop.padLabels[loop.selectedSound] || "")
+                                }
+                                QQC2.Button {
+                                    focusPolicy: Qt.NoFocus
+                                    icon.name: "document-open"
+                                    text: "Sample…"
+                                    onClicked: { sampleDialog.pad = loop.selectedSound; sampleDialog.open() }
+                                    QQC2.ToolTip.text: loop.kitIsBuiltIn
+                                        ? "Load a WAV on this pad. The built-in kit stays as it is: you get an editable copy of it"
+                                        : "Load a WAV on this pad (or drop one on it). The old sample is kept in the kit's replaced folder"
+                                    QQC2.ToolTip.visible: hovered
+                                }
+                                QQC2.ToolButton {
+                                    focusPolicy: Qt.NoFocus
+                                    icon.name: "edit-rename"
+                                    enabled: (loop.padLabels[loop.selectedSound] || "") !== ""
+                                    onClicked: { padNameField.text = loop.padLabels[loop.selectedSound]; renamePadDialog.open() }
+                                    QQC2.ToolTip.text: "Rename this pad"
+                                    QQC2.ToolTip.visible: hovered
+                                }
+                                QQC2.ToolButton {
+                                    focusPolicy: Qt.NoFocus
+                                    icon.name: "edit-clear"
+                                    enabled: (loop.padLabels[loop.selectedSound] || "") !== ""
+                                    onClicked: loop.clearPad(loop.selectedSound)
+                                    QQC2.ToolTip.text: "Empty this pad (its sample goes to the kit's replaced folder)"
+                                    QQC2.ToolTip.visible: hovered
                                 }
                                 Item { Layout.fillWidth: true }
                                 QQC2.Label {
@@ -1010,6 +1104,82 @@ Kirigami.ApplicationWindow {
                     Item { Layout.fillHeight: true }
                 }
             }
+        }
+    }
+
+    // --- kits: import a folder, swap a pad's sample, or drop either on the window ---------
+    FolderDialog {
+        id: kitFolderDialog
+        title: "Import a kit: a folder of WAVs"
+        onAccepted: loop.importKit(selectedFolder)
+    }
+    FileDialog {
+        id: kitFileDialog
+        title: "Import a kit file"
+        nameFilters: ["Chimp kits and zips (*.chimpkit *.zip)", "All files (*)"]
+        onAccepted: loop.importKit(selectedFile)
+    }
+    FileDialog {
+        id: kitExportDialog
+        title: "Export " + loop.kitName
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "chimpkit"
+        nameFilters: ["Chimp kits (*.chimpkit)"]
+        onAccepted: loop.exportKit(selectedFile)
+    }
+    Kirigami.PromptDialog {
+        id: newKitDialog
+        title: "New empty kit"
+        subtitle: "Then put sounds on it pad by pad: Sample… on a pad, or drop WAVs on the pads."
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
+        onOpened: newKitName.forceActiveFocus()
+        onAccepted: { loop.newKit(newKitName.text); keyCatcher.forceActiveFocus() }
+        onRejected: keyCatcher.forceActiveFocus()
+        QQC2.TextField {
+            id: newKitName
+            placeholderText: "Kit name"
+            onAccepted: newKitDialog.accept()
+        }
+    }
+    Kirigami.PromptDialog {
+        id: renamePadDialog
+        title: "Rename pad " + (loop.selectedSound + 1)
+        standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
+        onOpened: { padNameField.forceActiveFocus(); padNameField.selectAll() }
+        onAccepted: { loop.renamePad(loop.selectedSound, padNameField.text); keyCatcher.forceActiveFocus() }
+        onRejected: keyCatcher.forceActiveFocus()
+        QQC2.TextField {
+            id: padNameField
+            maximumLength: 40
+            onAccepted: renamePadDialog.accept()
+        }
+    }
+    FileDialog {
+        id: sampleDialog
+        property int pad: 0
+        title: "A WAV for pad " + (pad + 1)
+        nameFilters: ["WAV files (*.wav *.WAV)", "All files (*)"]
+        onAccepted: loop.replacePadSample(pad, selectedFile)
+    }
+    DropArea {
+        id: windowDrop
+        parent: root.contentItem
+        anchors.fill: parent
+        z: -1
+        onDropped: (drop) => { loop.dropped(drop.urls); drop.accept() }
+    }
+    Rectangle {
+        parent: root.contentItem
+        anchors.fill: parent
+        z: 100
+        visible: windowDrop.containsDrag
+        color: Qt.alpha(Kirigami.Theme.highlightColor, 0.12)
+        border.width: 3
+        border.color: Kirigami.Theme.highlightColor
+        QQC2.Label {
+            anchors.centerIn: parent
+            text: "Drop a kit (folder of WAVs, .chimpkit, .zip) to import it, or a WAV for pad " + (loop.selectedSound + 1)
+            font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.4
         }
     }
 
