@@ -1,9 +1,11 @@
-"""What a MIDI message does in the looper: play a sound, or a transport action.
+"""What a MIDI message does in the looper: play a sound, a transport action, or turn
+a knob parameter (filter, delay, reverb, swing, pitch, decay, volume).
 
 By default any note plays a sound: note 36 is sound 1 (Kick) up to note 51, then it
 wraps, so an LPD8 program on notes 36-43 plays the first 8 sounds and a KO II group the
-first 12. "Assign" learns a control for a sound or an action, per device; assigned
-controls take precedence, and a control assigned to an action doesn't play a sound.
+first 12; and CC 70-77 (the LPD8 mk2's knobs out of the box) turn the 8 parameters.
+"Assign" learns a control for a sound, an action or a parameter, per device; assigned
+controls take precedence over the defaults.
 """
 
 from __future__ import annotations
@@ -12,10 +14,12 @@ import json
 from dataclasses import dataclass, field
 
 from ..desktop.config import CONFIG_DIR
+from .engine import PARAM_IDS
 from .kit import NUM_SOUNDS
 
 SETTINGS_PATH = CONFIG_DIR / "loop.json"
 DEFAULT_BASE_NOTE = 36
+DEFAULT_KNOB_CC = 70  # CC 70-77 -> PARAMS in order
 
 ACTIONS: dict[str, str] = {
     "record": "Record / overdub",
@@ -43,9 +47,22 @@ def key_of(msg: list[int]) -> tuple[str, float] | None:
     return None
 
 
+def value_of(msg: list[int]) -> tuple[str, float] | None:
+    """('cc:ch:num' | 'pb:ch:0', position 0-1) for anything knob- or fader-like."""
+    if len(msg) < 3:
+        return None
+    kind, ch = msg[0] & 0xF0, (msg[0] & 0x0F) + 1
+    if kind == 0xB0:
+        return f"cc:{ch}:{msg[1]}", msg[2] / 127
+    if kind == 0xE0:
+        return f"pb:{ch}:0", (msg[1] | (msg[2] << 7)) / 16383
+    return None
+
+
 def describe(key: str) -> str:
     kind, ch, num = key.split(":")
-    return {"note": f"Note {num}", "cc": f"CC {num}", "pc": f"Program {int(num) + 1}"}[kind] + f" · ch {ch}"
+    name = {"note": f"Note {num}", "cc": f"CC {num}", "pc": f"Program {int(num) + 1}", "pb": "Pitch bend"}[kind]
+    return f"{name} · ch {ch}"
 
 
 @dataclass
@@ -56,6 +73,8 @@ class LoopSettings:
     quantise: int = 16
     metronome: bool = True
     volume: float = 0.8
+    fixed_velocity: bool = False
+    sound: dict = field(default_factory=dict)  # Engine.sound_settings(): fx, swing, pitch/decay
     # device -> {key: "sound:N" | action name}
     assign: dict[str, dict[str, str]] = field(default_factory=dict)
 
@@ -67,17 +86,24 @@ class LoopSettings:
         if key.startswith("note:"):
             note = int(key.rsplit(":", 1)[1])
             return f"sound:{(note - DEFAULT_BASE_NOTE) % NUM_SOUNDS}"
+        if key.startswith("cc:"):
+            k = int(key.rsplit(":", 1)[1]) - DEFAULT_KNOB_CC
+            if 0 <= k < len(PARAM_IDS) and not self._taken(key):
+                return f"param:{PARAM_IDS[k]}"
         return None
+
+    def _taken(self, key: str) -> bool:
+        """Assigned on some device: then the CC 70-77 default doesn't apply to it."""
+        return any(key in keys for keys in self.assign.values())
 
     def set_assign(self, device: str, key: str, target: str) -> None:
         dev = self.assign.setdefault(device, {})
-        if target.startswith("action:"):
-            # one control per action and device: move it rather than adding a second
-            for k in [k for k, v in dev.items() if v == target[7:]]:
+        stored = target[7:] if target.startswith("action:") else target
+        if not target.startswith("sound:"):
+            # one control per action/parameter and device: move it rather than add a second
+            for k in [k for k, v in dev.items() if v == stored]:
                 del dev[k]
-            dev[key] = target[7:]
-        else:
-            dev[key] = target
+        dev[key] = stored
 
     def actions_assigned(self) -> dict[str, list[str]]:
         """action -> ['Device · Note 40 · ch 1', ...] for the UI."""
@@ -86,6 +112,19 @@ class LoopSettings:
             for key, target in keys.items():
                 if target in out:
                     out[target].append(f"{device} · {describe(key)}")
+        return out
+
+    def params_assigned(self) -> dict[str, list[str]]:
+        """param -> ['Device · CC 21 · ch 1', ...]; the CC 70-77 defaults are listed too."""
+        out: dict[str, list[str]] = {p: [] for p in PARAM_IDS}
+        for device, keys in self.assign.items():
+            for key, target in keys.items():
+                if target.startswith("param:") and target[6:] in out:
+                    out[target[6:]].append(f"{device} · {describe(key)}")
+        for i, p in enumerate(PARAM_IDS):
+            key = f"cc:1:{DEFAULT_KNOB_CC + i}"
+            if not out[p] and not self._taken(key):
+                out[p].append(f"CC {DEFAULT_KNOB_CC + i} (LPD8 knob {i + 1})")
         return out
 
     def clear_assign(self, target: str) -> None:
@@ -101,7 +140,7 @@ class LoopSettings:
         except (OSError, ValueError):
             return cls()
         s = cls()
-        for k in ("kit", "bpm", "bars", "quantise", "metronome", "volume", "assign"):
+        for k in ("kit", "bpm", "bars", "quantise", "metronome", "volume", "assign", "fixed_velocity", "sound"):
             if k in raw:
                 setattr(s, k, raw[k])
         return s

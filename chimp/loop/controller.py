@@ -3,16 +3,20 @@ and the MIDI path (pads -> sounds and transport, assign mode)."""
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
 import time
 from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from ..desktop.midi import MidiHub
+from ..desktop.service import LPD8_CLIENT, STATUS_PATH
 from . import files
-from .engine import QUANTISE_STEPS, Engine
+from .engine import MAX_SWING, PARAMS, QUANTISE_STEPS, Engine
 from .kit import NUM_SOUNDS, kit_dirs, load_kit
-from .mapping import ACTIONS, LoopSettings, describe, key_of
+from .mapping import ACTIONS, LoopSettings, describe, key_of, value_of
 
 QUANTISE_LABELS = {0: "Off", 4: "1/4", 8: "1/8", 16: "1/16", 32: "1/32"}
 
@@ -38,10 +42,20 @@ class LoopController(QObject):
         self.hub.message.connect(self._on_midi_ui)
         self.hub.devicesChanged.connect(self.changed)
         self._timer = QTimer(self, interval=33, timeout=self._on_tick)
+        # The LPD8 on one of its desktop programs belongs to the desktop service: its knobs
+        # (CC 70-77 on every program, out of the box) mustn't also turn the looper's.
+        self._lpd8_desktop = 0  # that program's number, or 0
+        self._status_mtime = 0.0
+        self._status_timer = QTimer(self, interval=400, timeout=self._poll_status)
+        # Knob sweeps change parameters many times a second: save once they settle.
+        self._save_later = QTimer(self, singleShot=True, interval=1500, timeout=self._save_settings)
+        self._save_rev = -1
 
     def start(self) -> None:
+        self._poll_status()
         self.hub.start()
         self._timer.start()
+        self._status_timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
@@ -53,6 +67,9 @@ class LoopController(QObject):
         e = self.e
         e.bpm, e.bars, e.metronome, e.volume = float(s.bpm), int(s.bars), bool(s.metronome), float(s.volume)
         e.quantise = s.quantise if s.quantise in QUANTISE_STEPS else 16
+        e.fixed_velocity = bool(s.fixed_velocity)
+        if s.sound:
+            e.apply_sound_settings(s.sound)
         names = [d.name for d in self._kits]
         self._load_kit(names.index(s.kit) if s.kit in names else 0)
 
@@ -69,6 +86,8 @@ class LoopController(QObject):
         with self.e.lock:
             self.s.bpm, self.s.bars, self.s.quantise = self.e.bpm, self.e.bars, self.e.quantise
             self.s.metronome, self.s.volume = self.e.metronome, self.e.volume
+            self.s.fixed_velocity = self.e.fixed_velocity
+            self.s.sound = self.e.sound_settings()
         try:
             self.s.save()
         except OSError as exc:
@@ -76,10 +95,46 @@ class LoopController(QObject):
 
     # --- MIDI ------------------------------------------------------------------------
 
-    def _on_midi_now(self, device: str, msg: list[int]) -> None:
-        """rtmidi's thread: play sounds with no delay. Everything else waits for the UI."""
-        if self._assigning:
+    def _poll_status(self) -> None:
+        try:
+            mtime = STATUS_PATH.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        if mtime == self._status_mtime:
             return
+        self._status_mtime = mtime
+        busy = 0
+        with contextlib.suppress(OSError, ValueError, TypeError):
+            st = json.loads(STATUS_PATH.read_text())
+            pid = int(st.get("pid", 0))
+            alive = pid > 0 and Path(f"/proc/{pid}").exists() and pid != os.getpid()
+            active = int(st.get("active") or 0)
+            if alive and st.get("connected") and active in (st.get("desktopPrograms") or []):
+                busy = active
+        if busy != self._lpd8_desktop:
+            self._lpd8_desktop = busy
+            if busy:
+                self.notify.emit(f"LPD8 is on Program {busy} (desktop control): switch program to play drums")
+            self.changed.emit()
+
+    @Property(str, notify=changed)
+    def lpd8Note(self) -> str:
+        n = self._lpd8_desktop
+        return f"LPD8 on Program {n} = desktop control (switch program to drum)" if n else ""
+
+    def _ignored(self, device: str) -> bool:
+        return bool(self._lpd8_desktop) and device == LPD8_CLIENT
+
+    def _on_midi_now(self, device: str, msg: list[int]) -> None:
+        """rtmidi's thread: sounds and knobs act at once. Everything else waits for the UI."""
+        if self._assigning or self._ignored(device):
+            return
+        v = value_of(msg)
+        if v is not None:
+            target = self.s.target(device, v[0])
+            if target and target.startswith("param:"):
+                self.e.set_param(target[6:], v[1])
+                return
         k = key_of(msg)
         if k is None:
             return
@@ -88,26 +143,41 @@ class LoopController(QObject):
             self.e.trigger(int(target[6:]), k[1], time.monotonic())
 
     def _on_midi_ui(self, device: str, msg: list[int]) -> None:
+        if self._ignored(device):
+            return
+        if self._assigning.startswith("param:"):
+            v = value_of(msg)
+            if v is not None:  # a knob or fader: learn it
+                self._learn(device, v[0])
+            return
         k = key_of(msg)
         if k is None:
             return
         key, vel = k
         if self._assigning:
-            what = self._assigning
-            self.s.set_assign(device, key, what)
-            self._assigning = ""
-            label = ACTIONS.get(what[7:]) if what.startswith("action:") else self.padLabels[int(what[6:])]
-            self.notify.emit(f"{label} ← {device} · {describe(key)}")
-            self._save_settings()
-            self.changed.emit()
+            self._learn(device, key)
             return
         target = self.s.target(device, key)
-        if not target:
+        if not target or target.startswith("param:"):
             return
         if target.startswith("sound:"):
             self.padHit.emit(int(target[6:]), vel)
         else:
             self.runAction(target)
+
+    def _learn(self, device: str, key: str) -> None:
+        what = self._assigning
+        self.s.set_assign(device, key, what)
+        self._assigning = ""
+        if what.startswith("action:"):
+            label = ACTIONS.get(what[7:], what)
+        elif what.startswith("param:"):
+            label = {p: lab for p, lab, _ in PARAMS}.get(what[6:], what)
+        else:
+            label = self.padLabels[int(what[6:])]
+        self.notify.emit(f"{label} ← {device} · {describe(key)}")
+        self._save_settings()
+        self.changed.emit()
 
     # --- properties ------------------------------------------------------------------
 
@@ -116,6 +186,7 @@ class LoopController(QObject):
         if self.e.revision != self._last_rev:
             self._last_rev = self.e.revision
             self.changed.emit()
+            self._save_later.start()  # knob moves from the controller land here too
 
     @Property(str, notify=tick)
     def state(self) -> str:
@@ -188,16 +259,65 @@ class LoopController(QObject):
 
     @Property("QVariantList", notify=changed)
     def hitMarks(self) -> list:
-        """[{pos 0-1, sound, layer}] for the timeline, quantised as they'll play."""
+        """[{pos 0-1, sound, layer, vel}] for the timeline, quantised as they'll play."""
         e = self.e
         with e.lock:
             if not e.length:
                 return []
             return [
-                {"pos": e.placed(h.t) / e.length, "sound": h.sound, "layer": i}
+                {"pos": e.placed(h.t) / e.length, "sound": h.sound, "layer": i, "vel": h.vel}
                 for i, layer in enumerate(e.layers)
                 for h in layer
             ]
+
+    @Property(int, notify=changed)
+    def selectedSound(self) -> int:
+        return self.e.selected
+
+    @Property(bool, notify=changed)
+    def fixedVelocity(self) -> bool:
+        return self.e.fixed_velocity
+
+    @Property("QVariantList", notify=changed)
+    def params(self) -> list:
+        """[{id, label, value 0-1, text, assigned}] for the effect dials."""
+        e = self.e
+        got = self.s.params_assigned()
+        sel = self.padLabels[e.selected] or f"Sound {e.selected + 1}"
+        out = []
+        for pid, label, _default in PARAMS:
+            v = e.get_param(pid)
+            if pid in ("pitch", "decay"):
+                label = f"{label} · {sel}"
+            out.append(
+                {
+                    "id": pid,
+                    "label": label,
+                    "value": v,
+                    "text": self._param_text(pid, v),
+                    "assigned": ", ".join(got.get(pid, [])),
+                }
+            )
+        return out
+
+    def _param_text(self, pid: str, v: float) -> str:
+        e = self.e
+        if pid == "filter":
+            if abs(v - 0.5) <= e.fx.filter.DEAD:
+                return "Off"
+            t = (abs(v - 0.5) - e.fx.filter.DEAD) / (0.5 - e.fx.filter.DEAD)
+            hz = 20000.0 * (150.0 / 20000.0) ** t if v < 0.5 else 20.0 * (6000.0 / 20.0) ** t
+            return ("LP " if v < 0.5 else "HP ") + (f"{hz / 1000:.1f} kHz" if hz >= 1000 else f"{hz:.0f} Hz")
+        if pid in ("delay", "reverb"):
+            return "Off" if v <= 0 else f"{v * 100:.0f}%"
+        if pid == "swing":
+            return "Off" if v <= 0 else f"{50 * (1 + v * MAX_SWING):.0f}%"
+        if pid == "pitch":
+            p = e.pitch[e.selected]
+            return "0" if p == 0 else f"{p:+g} st"
+        if pid == "decay":
+            return "Full" if v >= 1 else f"{v * 100:.0f}%"
+        return f"{v * 100:.0f}%"
 
     @Property("QStringList", notify=changed)
     def devices(self) -> list[str]:
@@ -236,6 +356,24 @@ class LoopController(QObject):
             return
         self.e.trigger(sound, 1.0)
         self.padHit.emit(sound, 1.0)
+        self.changed.emit()  # selected sound: pitch/decay dials follow it
+
+    @Slot(str, float)
+    def setParam(self, pid: str, v: float) -> None:
+        self.e.set_param(pid, v)
+        self._save_later.start()
+
+    @Slot(str)
+    def resetParam(self, pid: str) -> None:
+        self.e.set_param(pid, {p: d for p, _l, d in PARAMS}[pid])
+        self._save_later.start()
+        self.changed.emit()
+
+    @Slot(bool)
+    def setFixedVelocity(self, on: bool) -> None:
+        self.e.fixed_velocity = on
+        self._save_settings()
+        self.changed.emit()
 
     @Slot(str)
     def runAction(self, action: str) -> None:

@@ -183,6 +183,8 @@ class DesktopController(QObject):
         self._status["active"] = self.active
         self._status["connected"] = self.dev.connected
         self._status["paused"] = self.paused
+        # LPD8 programs whose pads/knobs drive the desktop (Chimp Loop leaves those alone)
+        self._status["desktopPrograms"] = [] if self.paused else self.cfg.slots_with_actions()
         self._status["targets"] = self.focus.snapshot()
         self._status["devices"] = {
             name: {"profile": self.current_profile_index(name), "connected": name in self.hub.devices}

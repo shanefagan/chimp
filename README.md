@@ -104,6 +104,20 @@ from every controller and records what you play into a loop.
   `~/.local/share/chimp/kits/<name>/`. Files named `kick`, `snare_1`, `clap`, `hihat_1`,
   `open_hihat`, `rim`, `tom_1`, `crash`, `snare_2`, `hihat_2`, `tom_2`, `tom_3`, `ride`,
   `perc_1`, `perc_2` and `perc_3` go to those slots; others fill the gaps.
+- **Velocity:** pads play and record as hard as you hit them (dot size on the timeline);
+  **Fixed velocity** plays every hit at full strength.
+- **Knobs and effects:** eight dials, on the LPD8's knobs 1–8 out of the box (CC 70–77),
+  or on any knob or fader you assign:
+  - **Filter:** centre off; left sweeps a low-pass down, right a high-pass up (DJ style)
+  - **Delay** and **Echoes:** tempo-synced dotted-eighth echoes (mix, feedback)
+  - **Reverb**
+  - **Swing:** every second 1/8 or 1/16 late, up to 75%, on quantised playback and in the
+    MIDI export
+  - **Pitch** and **Decay** of the last pad you hit (tune the kick, shorten the open hat)
+  - **Volume**
+
+  Double-click a dial to reset it. Effects, swing and per-sound pitch/decay are saved with
+  each loop and go into WAV exports.
 - **Save** loops (`~/.local/share/chimp/loops/`), and **export** to `~/Music/Chimp/`:
   - WAV, N repeats, looping seamlessly
   - MIDI: General MIDI drum notes on channel 10, at the loop's tempo
@@ -114,8 +128,9 @@ Pads trigger from rtmidi's own thread, not a polling timer. The looper asks Pipe
 recorded where you heard them, with that latency taken off.
 
 While Chimp Loop is open, the desktop service leaves the other controllers to it: no
-desktop actions from the KO II's profile while you drum. The LPD8's desktop program still
-works; play drums on another program.
+desktop actions from the KO II's profile while you drum. The LPD8 stays with the desktop
+while it's on a program with desktop actions (the looper says so in its title bar), so its
+knobs don't turn the volume and the filter at once; switch program to drum.
 
 ## LPD8 desktop control
 

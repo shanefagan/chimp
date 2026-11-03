@@ -123,6 +123,25 @@ def after_button() -> None:
         mid[:4] == b"MThd" and mid.count(b"\x99\x24") == 2 and mid.count(b"\x99\x26") == 2,
         "MIDI file: 2 kicks, 2 snares on ch 10",
     )
+    # knobs: LPD8 default CCs act at once (MIDI thread), learning moves a parameter
+    port.send_message([0xB0, 71, 64])  # knob 2: delay
+    port.send_message([0xB0, 70, 0])  # knob 1: filter all the way down
+
+
+def after_knobs() -> None:
+    check(abs(e.fx.delay.mix - 64 / 127) < 1e-6, f"CC 71 turned the delay ({e.fx.delay.mix:.2f})")
+    check(e.fx.filter.value == 0.0 and "LP 150 Hz" in [p["text"] for p in ctl.params], "CC 70 turned the filter")
+    ctl.assign("param:reverb")
+    port.send_message([0xB0, 21, 5])
+
+
+def after_learn() -> None:
+    check(ctl.s.assign.get("Test Pads", {}).get("cc:1:21") == "param:reverb", "CC 21 learned for reverb")
+    port.send_message([0xB0, 21, 127])
+
+
+def after_learned_knob() -> None:
+    check(e.fx.reverb.mix == 1.0, f"learned knob turns reverb ({e.fx.reverb.mix})")
     stop.set()
     ctl.stop()
     app.quit()
@@ -135,7 +154,9 @@ def chain(*steps) -> None:
         QTimer.singleShot(300, lambda: chain(*steps[1:]))
 
 
-QTimer.singleShot(2000, lambda: chain(script, after_take, after_assign, after_button))
+QTimer.singleShot(
+    2000, lambda: chain(script, after_take, after_assign, after_button, after_knobs, after_learn, after_learned_knob)
+)
 QTimer.singleShot(12000, app.quit)
 app.exec()
 print("FAILED" if failures else "all good", f"({tmp})")

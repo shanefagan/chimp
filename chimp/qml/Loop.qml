@@ -8,9 +8,9 @@ Kirigami.ApplicationWindow {
     id: root
 
     width: Kirigami.Units.gridUnit * 64
-    height: Kirigami.Units.gridUnit * 42
+    height: Kirigami.Units.gridUnit * 47
     minimumWidth: Kirigami.Units.gridUnit * 46
-    minimumHeight: Kirigami.Units.gridUnit * 34
+    minimumHeight: Kirigami.Units.gridUnit * 40
     title: "Chimp Loop"
 
     // Pads on screen like an 8- or 16-pad controller: sound 1 bottom-left, 16 top-right.
@@ -53,8 +53,10 @@ Kirigami.ApplicationWindow {
         actions: [
             Kirigami.Action {
                 displayComponent: QQC2.Label {
-                    text: loop.devices.length ? "Listening to " + loop.devices.join(", ") : "No MIDI controllers"
-                    opacity: 0.7
+                    text: loop.lpd8Note !== "" ? loop.lpd8Note
+                          : loop.devices.length ? "Listening to " + loop.devices.join(", ") : "No MIDI controllers"
+                    color: loop.lpd8Note !== "" ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.textColor
+                    opacity: loop.lpd8Note !== "" ? 1 : 0.7
                 }
             }
         ]
@@ -177,6 +179,14 @@ Kirigami.ApplicationWindow {
                         QQC2.ToolTip.text: "Clicks while recording and overdubbing"
                         QQC2.ToolTip.visible: hovered
                     }
+                    QQC2.Switch {
+                        focusPolicy: Qt.NoFocus
+                        text: "Fixed velocity"
+                        checked: loop.fixedVelocity
+                        onToggled: loop.setFixedVelocity(checked)
+                        QQC2.ToolTip.text: "Every hit at full strength, however hard you hit the pad"
+                        QQC2.ToolTip.visible: hovered
+                    }
                     RowLayout {
                         QQC2.Label { text: "Kit" }
                         QQC2.ComboBox {
@@ -224,10 +234,12 @@ Kirigami.ApplicationWindow {
                         model: loop.hitMarks
                         delegate: Rectangle {
                             required property var modelData
-                            x: timeline.width * modelData.pos - 2
-                            y: 4 + (timeline.height - 12) * (modelData.sound / 15)
-                            width: 5; height: 5; radius: 2.5
+                            readonly property real size: 3 + 5 * modelData.vel
+                            x: timeline.width * modelData.pos - size / 2
+                            y: 6 + (timeline.height - 12) * (modelData.sound / 15) - size / 2
+                            width: size; height: size; radius: size / 2
                             color: root.soundColor(modelData.sound)
+                            opacity: 0.45 + 0.55 * modelData.vel
                         }
                     }
                     Rectangle {
@@ -246,6 +258,74 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
+                // effects: 8 dials, each on a knob of yours (LPD8 knobs 1-8 out of the box)
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: fxRow.implicitHeight + Kirigami.Units.smallSpacing * 2
+                    radius: Kirigami.Units.cornerRadius
+                    color: Kirigami.Theme.alternateBackgroundColor
+                    border.color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+
+                    RowLayout {
+                        id: fxRow
+                        anchors.fill: parent
+                        anchors.margins: Kirigami.Units.smallSpacing
+                        spacing: 0
+                        Repeater {
+                            model: 8
+                            delegate: ColumnLayout {
+                                id: cell
+                                required property int index
+                                readonly property var p: loop.params[index] || ({ id: "", label: "", value: 0, text: "", assigned: "" })
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                spacing: 0
+                                QQC2.Label {
+                                    Layout.fillWidth: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: cell.p.label
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                }
+                                QQC2.Dial {
+                                    id: dial
+                                    Layout.alignment: Qt.AlignHCenter
+                                    implicitWidth: Kirigami.Units.gridUnit * 3
+                                    implicitHeight: implicitWidth
+                                    focusPolicy: Qt.NoFocus
+                                    inputMode: QQC2.Dial.Vertical
+                                    from: 0; to: 1
+                                    onMoved: loop.setParam(cell.p.id, value)
+                                    // follows the hardware knob, except while you drag it here
+                                    Binding on value { value: cell.p.value; when: !dial.pressed }
+                                    TapHandler { onDoubleTapped: loop.resetParam(cell.p.id) }
+                                    QQC2.ToolTip.text: "Drag up/down; double-click to reset"
+                                    QQC2.ToolTip.visible: hovered && !pressed
+                                }
+                                QQC2.Label {
+                                    Layout.fillWidth: true
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: cell.p.text
+                                    opacity: 0.8
+                                    elide: Text.ElideRight
+                                }
+                                QQC2.ToolButton {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    focusPolicy: Qt.NoFocus
+                                    icon.name: "input-gaming"
+                                    display: QQC2.AbstractButton.IconOnly
+                                    checkable: true
+                                    checked: loop.assigning === "param:" + cell.p.id
+                                    onClicked: loop.assign(checked ? "param:" + cell.p.id : "")
+                                    QQC2.ToolTip.text: (cell.p.assigned ? "On " + cell.p.assigned + ". " : "")
+                                                       + "Click, then move a knob or fader to use that instead"
+                                    QQC2.ToolTip.visible: hovered
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // assign banner
                 Kirigami.InlineMessage {
                     Layout.fillWidth: true
@@ -253,6 +333,8 @@ Kirigami.ApplicationWindow {
                     type: Kirigami.MessageType.Information
                     text: loop.assigning.startsWith("sound:")
                           ? "Press the pad or button on your controller for " + loop.padLabels[parseInt(loop.assigning.slice(6))] + " (Esc cancels)"
+                          : loop.assigning.startsWith("param:")
+                          ? "Move the knob or fader on your controller for " + (loop.params.find(p => "param:" + p.id === loop.assigning) || {label: ""}).label + " (Esc cancels)"
                           : "Press the button on your controller for " + (loop.actionList.find(a => "action:" + a.id === loop.assigning) || {label: ""}).label + " (Esc cancels)"
                     actions: [ Kirigami.Action { text: "Cancel"; onTriggered: loop.assign("") } ]
                 }
@@ -291,8 +373,10 @@ Kirigami.ApplicationWindow {
                             radius: Kirigami.Units.cornerRadius * 2
                             readonly property color base: root.soundColor(sound)
                             color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, glow))
-                            border.width: loop.assigning === "sound:" + sound ? 3 : 1
-                            border.color: loop.assigning === "sound:" + sound ? Kirigami.Theme.highlightColor : Qt.alpha(base, 0.7)
+                            readonly property bool chosen: loop.selectedSound === sound
+                            border.width: loop.assigning === "sound:" + sound ? 3 : chosen ? 2 : 1
+                            border.color: loop.assigning === "sound:" + sound ? Kirigami.Theme.highlightColor
+                                        : chosen ? Qt.lighter(base, 1.5) : Qt.alpha(base, 0.7)
 
                             ColumnLayout {
                                 anchors.fill: parent

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .fx import Chain
 from .kit import NUM_SOUNDS, Kit
 
 # Closing these chokes the open hi-hat, as on a real kit.
@@ -24,6 +25,22 @@ OPEN_HAT = 4
 CLOSES_HAT = (3, 9)
 MAX_VOICES = 48
 QUANTISE_STEPS = (0, 4, 8, 16, 32)  # 0 = off; else notes per bar (4 = quarter notes)
+
+# What knobs can turn, 0-1 each: (id, label, default). Pitch and decay act on the
+# selected sound (the last pad hit or clicked).
+PARAMS: list[tuple[str, str, float]] = [
+    ("filter", "Filter", 0.5),
+    ("delay", "Delay", 0.0),
+    ("feedback", "Echoes", 0.4),
+    ("reverb", "Reverb", 0.0),
+    ("swing", "Swing", 0.0),
+    ("pitch", "Pitch", 0.5),
+    ("decay", "Decay", 1.0),
+    ("volume", "Volume", 0.8),
+]
+PARAM_IDS = [p[0] for p in PARAMS]
+MAX_SWING = 0.5  # of a grid step: 0.33 is a triplet feel
+VARIANT_CACHE = 64
 
 
 @dataclass
@@ -74,6 +91,13 @@ class Engine:
         self._block_playhead = 0
         self._block_abs = 0
         self._clicks = (_click(rate, 1760.0), _click(rate, 1175.0))  # bar, beat
+        self.fx = Chain(rate)
+        self.swing = 0.0  # 0-1 of MAX_SWING
+        self.pitch = [0.0] * NUM_SOUNDS  # semitones, -12..+12
+        self.decay = [1.0] * NUM_SOUNDS  # 1 = the sample's own length
+        self.selected = 0  # the sound pitch/decay knobs act on
+        self.fixed_velocity = False
+        self._variants: dict[tuple, np.ndarray] = {}
 
     # --- timing helpers ----------------------------------------------------------
 
@@ -90,7 +114,11 @@ class Engine:
         """Where a hit plays: snapped to the grid if quantising, inside the loop."""
         g = self.grid_frames()
         if g and self.length:
-            t = round(round(t / g) * g)
+            k = round(t / g)
+            p = k * g
+            if self.swing and self.quantise in (8, 16) and k % 2:
+                p += self.swing * MAX_SWING * g  # every second step late
+            t = round(p)
         return t % self.length if self.length else t
 
     def _heard_now(self, now: float | None) -> tuple[int, int]:
@@ -114,7 +142,8 @@ class Engine:
         with self.lock:
             if not (0 <= sound < NUM_SOUNDS) or self.kit is None or self.kit.sounds[sound] is None:
                 return
-            vel = max(0.0, min(1.0, vel))
+            vel = 1.0 if self.fixed_velocity else max(0.0, min(1.0, vel))
+            self.selected = sound
             self._pending.append((sound, vel))
             if self.state not in ("recording", "overdub"):
                 return
@@ -233,7 +262,108 @@ class Engine:
             self._voices = [v for v in self._voices if v.slot != OPEN_HAT]
         if len(self._voices) >= MAX_VOICES:
             self._voices.pop(0)
-        self._voices.append(_Voice(s.data, vel, delay, sound))
+        self._voices.append(_Voice(self._variant(sound, s.data), vel, delay, sound))
+
+    def _variant(self, sound: int, data: np.ndarray) -> np.ndarray:
+        """The sample with this sound's pitch and decay (cached)."""
+        pitch = round(self.pitch[sound] * 4) / 4
+        decay = round(self.decay[sound], 2)
+        if pitch == 0 and decay >= 1.0:
+            return data
+        key = (id(data), pitch, decay)
+        v = self._variants.get(key)
+        if v is None:
+            v = data
+            if pitch:
+                ratio = 2.0 ** (pitch / 12)
+                pos = np.arange(0, len(v) - 1, ratio)
+                idx = np.arange(len(v))
+                v = np.stack([np.interp(pos, idx, v[:, c]) for c in (0, 1)], axis=1).astype(np.float32)
+            if decay < 1.0:
+                t = np.arange(len(v), dtype=np.float32) / self.rate
+                tau = 0.015 + 0.6 * decay**2  # seconds
+                env = np.exp(-t / tau)
+                cut = int(np.searchsorted(-env, -1e-3))  # where it's inaudible
+                v = (v * env[:, None])[: max(64, cut)].copy()
+                v[-64:] *= np.linspace(1, 0, 64, dtype=np.float32)[:, None]
+            if len(self._variants) >= VARIANT_CACHE:
+                self._variants.pop(next(iter(self._variants)))
+            self._variants[key] = v
+        return v
+
+    # --- knobs ---------------------------------------------------------------------
+
+    def get_param(self, name: str) -> float:
+        fx = self.fx
+        return {
+            "filter": lambda: fx.filter.value,
+            "delay": lambda: fx.delay.mix,
+            "feedback": lambda: fx.delay.feedback / 0.9,
+            "reverb": lambda: fx.reverb.mix,
+            "swing": lambda: self.swing,
+            "pitch": lambda: (self.pitch[self.selected] + 12) / 24,
+            "decay": lambda: self.decay[self.selected],
+            "volume": lambda: self.volume,
+        }[name]()
+
+    def set_param(self, name: str, v: float) -> None:
+        v = max(0.0, min(1.0, float(v)))
+        fx = self.fx
+        if name == "filter":
+            fx.filter.value = v
+        elif name == "delay":
+            fx.delay.mix = v
+        elif name == "feedback":
+            fx.delay.feedback = v * 0.9
+        elif name == "reverb":
+            fx.reverb.mix = v
+        elif name == "swing":
+            self.swing = v
+        elif name == "pitch":
+            self.pitch[self.selected] = round((v * 24 - 12) * 4) / 4
+        elif name == "decay":
+            self.decay[self.selected] = max(0.02, v)
+        elif name == "volume":
+            self.volume = v
+        self._changed()
+
+    def sound_settings(self) -> dict:
+        """What makes a loop sound the way it does, besides its hits (saved with it)."""
+        return {
+            "pitch": list(self.pitch),
+            "decay": list(self.decay),
+            "swing": self.swing,
+            "fx": {p: self.get_param(p) for p in ("filter", "delay", "feedback", "reverb")},
+        }
+
+    def apply_sound_settings(self, d: dict) -> None:
+        with self.lock:
+            if len(d.get("pitch", [])) == NUM_SOUNDS:
+                self.pitch = [float(x) for x in d["pitch"]]
+            if len(d.get("decay", [])) == NUM_SOUNDS:
+                self.decay = [float(x) for x in d["decay"]]
+            self.swing = float(d.get("swing", self.swing))
+            for k, v in (d.get("fx") or {}).items():
+                if k in PARAM_IDS:
+                    self.set_param(k, v)
+            self._changed()
+
+    def copy_for_render(self) -> Engine:
+        """A separate engine with this loop and its sound, for offline export."""
+        with self.lock:
+            off = Engine(self.rate)
+            off.kit, off.volume, off.bpm, off.quantise, off.bars = (
+                self.kit,
+                self.volume,
+                self.bpm,
+                self.quantise,
+                self.bars,
+            )
+            off.metronome = False
+            off.apply_sound_settings(self.sound_settings())
+            off.layers = [[Hit(h.t, h.sound, h.vel, -(10**12)) for h in layer] for layer in self.layers]
+            off.length, off.state = self.length, "playing"
+            return off
 
     def _schedule(self, start: int, n: int) -> None:
         """Start the loop's hits (and metronome clicks) that fall in [start, start+n)."""
@@ -267,6 +397,7 @@ class Engine:
 
     def render(self, n: int) -> np.ndarray:
         out = np.zeros((n, 2), dtype=np.float32)
+        clicks = np.zeros((n, 2), dtype=np.float32)
         with self.lock:
             self._block_time = time.monotonic()
             self._block_playhead = self.playhead
@@ -296,7 +427,8 @@ class Engine:
                 alive.append(v)
                 continue
             take = v.data[v.pos : v.pos + n - v.delay]
-            out[v.delay : v.delay + len(take)] += take * v.gain
+            dest = clicks if v.slot < 0 else out
+            dest[v.delay : v.delay + len(take)] += take * v.gain
             v.pos += len(take)
             v.delay = 0
             if v.pos < len(v.data):
@@ -304,6 +436,9 @@ class Engine:
         with self.lock:
             # Keep voices started meanwhile (by trigger) and drop finished/choked ones.
             self._voices = [v for v in self._voices if v in alive or v not in voices]
+        self.fx.delay.frames = round(self.beat_frames() * 0.75)  # a dotted eighth
+        out = self.fx.process(out)
+        out += clicks
         out *= volume
         np.clip(out, -1.0, 1.0, out=out)
         return out

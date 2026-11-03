@@ -131,4 +131,117 @@ def test_open_hat_is_choked_by_closed_hat():
     e.trigger(3)
     b = e.render(BLOCK)
     c = e.render(BLOCK)
-    assert a[:, 0].max() > 0 and b[0, 0] > 0.5 and c[:, 0].max() == 0
+    # (the master filter delays everything by 31 frames, so b starts with a's tail)
+    assert a[:, 0].max() > 0 and b[:, 0].max() > 0.5 and c[:, 0].max() == 0
+
+
+# --- effects and knobs ---------------------------------------------------------------
+
+
+def impulse_response(e: Engine, frames: int) -> np.ndarray:
+    e.trigger(0)
+    return np.concatenate([e.render(BLOCK) for _ in range(frames // BLOCK)])[:, 0]
+
+
+def test_delay_echoes_a_dotted_eighth_later():
+    e = engine(bpm=120.0)
+    e.set_param("delay", 1.0)
+    e.set_param("feedback", 0.0)
+    out = impulse_response(e, RATE)
+    peaks = onsets(out)
+    echo = round(RATE * 0.5 * 0.75)  # dotted eighth at 120 bpm
+    assert len(peaks) == 2 and abs((peaks[1] - peaks[0]) - echo) <= 40
+
+
+def test_filter_low_pass_darkens_and_high_pass_thins():
+    e = engine()
+    noise = np.random.default_rng(1).uniform(-0.5, 0.5, (RATE // 2, 2)).astype(np.float32)
+    e.kit.sounds[0].data = noise
+
+    def energy(v, lo, hi):
+        e.set_param("filter", v)
+        e._voices.clear()
+        x = impulse_response(e, RATE // 2)[2000:]
+        spec = np.abs(np.fft.rfft(x)) ** 2
+        f = np.fft.rfftfreq(len(x), 1 / RATE)
+        return spec[(f >= lo) & (f < hi)].sum() / spec.sum()
+
+    assert energy(0.5, 5000, 20000) > 0.4  # white noise: most energy is high
+    assert energy(0.15, 5000, 20000) < 0.01  # low-pass well down
+    assert energy(0.9, 0, 500) < 0.005  # high-pass up
+
+
+def test_reverb_tail_decays_and_stays_stable():
+    e = engine()
+    e.set_param("reverb", 1.0)
+    out = impulse_response(e, RATE * 4)
+    early = np.abs(out[RATE // 10 : RATE // 2]).max()
+    late = np.abs(out[RATE * 3 :]).max()
+    assert early > 0.005 and late < early / 20 and np.isfinite(out).all()
+
+
+def test_full_feedback_never_runs_away():
+    e = engine()
+    e.set_param("delay", 1.0)
+    e.set_param("feedback", 1.0)
+    e.set_param("reverb", 1.0)
+    out = impulse_response(e, RATE * 6)
+    assert np.isfinite(out).all() and np.abs(out[-RATE:]).max() < 0.5
+
+
+def test_swing_pushes_every_second_sixteenth():
+    e = engine(bars=1, bpm=120.0, quantise=16)
+    e.length = round(e.bar_frames())
+    g = e.grid_frames()
+    e.set_param("swing", 1.0)
+    assert e.placed(0) == 0
+    assert e.placed(round(g)) == round(g + 0.5 * g)
+    assert e.placed(round(2 * g)) == round(2 * g)
+
+
+def test_pitch_and_decay_act_on_the_selected_sound():
+    e = engine()
+    long = np.ones((RATE, 2), np.float32) * 0.1
+    e.kit.sounds[2].data = long
+    e.trigger(2)
+    assert e.selected == 2
+    e.set_param("pitch", 1.0)  # +12 semitones: half as long
+    e.set_param("decay", 0.2)
+    v = e._variant(2, long)
+    assert e.pitch[2] == 12.0 and e.pitch[0] == 0.0
+    assert len(v) < RATE // 3 and v[-1, 0] == 0.0  # 0.27 s instead of 1 s
+    e.set_param("decay", 1.0)
+    assert abs(len(e._variant(2, long)) - RATE // 2) <= 1
+
+
+def test_sound_settings_round_trip_through_save():
+    from chimp.loop import files
+
+    e = engine(bars=1)
+    e.length = round(e.bar_frames())
+    e.layers = [[]]
+    e.selected = 5
+    e.set_param("pitch", 0.25)
+    e.set_param("reverb", 0.3)
+    e.set_param("swing", 0.6)
+    d = files.to_dict(e, "clicks")
+    f = engine()
+    files.from_dict(f, d)
+    assert f.pitch[5] == -6.0 and abs(f.fx.reverb.mix - 0.3) < 1e-6 and abs(f.swing - 0.6) < 1e-6
+
+
+def test_effects_fit_easily_in_a_block():
+    import time
+
+    e = engine()
+    for p in ("delay", "reverb"):
+        e.set_param(p, 0.6)
+    e.set_param("filter", 0.2)
+    for i in range(16):
+        e.trigger(i)
+    e.render(BLOCK)
+    t = time.perf_counter()
+    for _ in range(200):
+        e.render(BLOCK)
+    per_block = (time.perf_counter() - t) / 200
+    assert per_block < (BLOCK / RATE) / 4, f"{per_block * 1000:.2f} ms per {BLOCK / RATE * 1000:.1f} ms block"

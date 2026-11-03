@@ -18,6 +18,14 @@ Notes 36\(en51 play sounds 1\(en16 (an LPD8 program on notes 36\(en43 plays the 
 eight); any pad or button can be assigned to a sound or to a looper control.
 Loops can be saved, and exported as WAV or as a standard MIDI file (General MIDI
 drum notes on channel 10).
+.SH KNOBS
+Eight parameters, on CC 70\(en77 (the LPD8 mk2's knobs out of the box) or on any knob
+or fader assigned in the window: Filter (centre off, left low-pass, right high-pass),
+Delay, Echoes (delay feedback), Reverb, Swing, Pitch and Decay of the last sound played,
+and Volume. Pad velocity is recorded unless Fixed velocity is on. While the LPD8 is on a
+program with desktop actions (see
+.BR chimpd (1)),
+the looper ignores it.
 .SH KEYS
 .TP
 .B Space

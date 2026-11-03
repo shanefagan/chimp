@@ -38,6 +38,7 @@ def to_dict(e: Engine, kit_name: str) -> dict:
             "length_s": e.length / r,
             # Layers kept apart so undo still works after loading.
             "layers": [[[round(h.t / r, 6), h.sound, round(h.vel, 4)] for h in layer] for layer in e.layers if layer],
+            "sound": e.sound_settings(),
         }
 
 
@@ -47,6 +48,8 @@ def from_dict(e: Engine, d: dict) -> None:
     e.bars = int(d.get("bars", 0))
     e.quantise = int(d.get("quantise", 16))
     e.load(round(float(d["length_s"]) * r), float(d.get("bpm", 120.0)), layers)
+    if d.get("sound"):
+        e.apply_sound_settings(d["sound"])
 
 
 def save(e: Engine, kit_name: str, name: str) -> Path:
@@ -79,14 +82,9 @@ def delete(name: str) -> None:
 def render(e: Engine, repeats: int = 4) -> np.ndarray:
     """The loop played `repeats` times, float32 stereo. One silent pass first, so sounds
     ringing over the loop point are there from the start and the file loops seamlessly."""
-    with e.lock:
-        if not e.length:
-            raise ValueError("nothing recorded")
-        off = Engine(e.rate)
-        off.kit, off.volume, off.bpm, off.quantise = e.kit, e.volume, e.bpm, e.quantise
-        off.metronome = False
-        off.layers = [[Hit(h.t, h.sound, h.vel, -(10**12)) for h in layer] for layer in e.layers]
-        off.length, off.state = e.length, "playing"
+    if not e.length:
+        raise ValueError("nothing recorded")
+    off = e.copy_for_render()
     block = 1024
     total = e.length * (repeats + 1)
     out = np.concatenate([off.render(block) for _ in range(-(-total // block))])
