@@ -17,7 +17,7 @@
 %global __requires_exclude ^python3(\\.[0-9]+)?dist\\(python-rtmidi\\)
 
 Name:           chimp
-Version:        0.6.1
+Version:        0.7.0
 Release:        1%{?dist}
 Summary:        MIDI controllers as a KDE Plasma control deck
 
@@ -141,6 +141,9 @@ export PYTHONPATH=%{buildroot}%{python3_sitelib}:%{buildroot}%{privdir}
 %{_mandir}/man1/chimp-loop.1*
 
 %changelog
+* Tue Nov 03 2026 Shane Fagan <mail@shanefagan.com> - 0.7.0-1
+- Chimp Loop, a drum machine and looper for any MIDI controller; overlay text readable on any pad colour
+
 * Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.6.1-1
 - CI fixes; Chimp no longer fails to start when pulsectl is installed without libpulse
 
