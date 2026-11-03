@@ -34,6 +34,7 @@ BuildRequires:  python3-hatchling
 BuildRequires:  python3-pip
 BuildRequires:  python3-pytest
 BuildRequires:  python3-pyside6
+BuildRequires:  python3-numpy
 BuildRequires:  desktop-file-utils
 # python-rtmidi
 BuildRequires:  gcc-c++
@@ -47,6 +48,7 @@ BuildRequires:  binutils
 Requires:       python3dist(pyside6)
 Requires:       qt6-qtdeclarative
 Requires:       qt6-qtwebsockets
+Requires:       qt6-qtmultimedia
 Requires:       kf6-kirigami
 Requires:       kf6-qqc2-desktop-style
 Requires:       layer-shell-qt
@@ -70,6 +72,9 @@ and in an on-screen overlay.
 It also replaces Akai's editor for the LPD8 mk2 (pads, knobs, programs
 over SysEx), and learns any class-compliant controller (Teenage Engineering
 KO II, Arturia MicroFreak and others) into profiles.
+
+Chimp Loop plays a drum kit from any controller and loops it, snapped to a
+grid or not, with overdub layers, and exports loops as WAV or MIDI files.
 
 %prep
 %autosetup -a1
@@ -104,13 +109,16 @@ rm -rf %{buildroot}%{privdir}/python_rtmidi-*.dist-info
 strip --strip-unneeded %{buildroot}%{privdir}/rtmidi/*.so
 %py_byte_compile %{python3} %{buildroot}%{privdir}
 install -Dpm0644 packaging/chimp.desktop %{buildroot}%{_datadir}/applications/chimp.desktop
+install -Dpm0644 packaging/chimp-loop.desktop %{buildroot}%{_datadir}/applications/chimp-loop.desktop
 install -Dpm0644 packaging/chimp.service %{buildroot}%{_userunitdir}/chimp.service
 install -Dpm0644 chimp/icons/chimp.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/chimp.svg
 install -Dpm0644 packaging/man/chimp.1 %{buildroot}%{_mandir}/man1/chimp.1
 install -Dpm0644 packaging/man/chimpd.1 %{buildroot}%{_mandir}/man1/chimpd.1
+install -Dpm0644 packaging/man/chimp-loop.1 %{buildroot}%{_mandir}/man1/chimp-loop.1
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/chimp.desktop
+desktop-file-validate %{buildroot}%{_datadir}/applications/chimp-loop.desktop
 export QT_QPA_PLATFORM=offscreen
 export PYTHONPATH=%{buildroot}%{python3_sitelib}:%{buildroot}%{privdir}
 %pytest -q -p no:cacheprovider tests
@@ -120,12 +128,15 @@ export PYTHONPATH=%{buildroot}%{python3_sitelib}:%{buildroot}%{privdir}
 %doc README.md
 %{_bindir}/chimp
 %{_bindir}/chimpd
+%{_bindir}/chimp-loop
 %{_libdir}/%{name}/
 %{_datadir}/applications/chimp.desktop
+%{_datadir}/applications/chimp-loop.desktop
 %{_datadir}/icons/hicolor/scalable/apps/chimp.svg
 %{_userunitdir}/chimp.service
 %{_mandir}/man1/chimp.1*
 %{_mandir}/man1/chimpd.1*
+%{_mandir}/man1/chimp-loop.1*
 
 %changelog
 * Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.6.1-1

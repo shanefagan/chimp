@@ -6,11 +6,12 @@ updates:
       interval: "weekly"
     # The packages build against the distributions' own copies of these, so their
     # floors follow the oldest distro we package for (Debian 13), not PyPI:
-    # hatchling 1.27, python-rtmidi 1.5.8. The dev tools (ruff, bandit, pytest)
+    # hatchling 1.27, python-rtmidi 1.5.8, numpy 2.2. The dev tools (ruff, bandit, pytest)
     # only go into the uv venv, so bumping those is fine.
     ignore:
       - dependency-name: "hatchling"
       - dependency-name: "python-rtmidi"
+      - dependency-name: "numpy"
 
   - package-ecosystem: "github-actions"
     directory: "/"

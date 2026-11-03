@@ -14,5 +14,5 @@ tar -C "$root" -czf "$out" \
     --exclude='__pycache__' --exclude='*.pyc' \
     --transform "s,^,chimp-$ver/," \
     pyproject.toml README.md LICENSE chimp tests \
-    packaging/chimp.desktop packaging/chimp.service packaging/man
+    packaging/chimp.desktop packaging/chimp-loop.desktop packaging/chimp.service packaging/man
 echo "$out"

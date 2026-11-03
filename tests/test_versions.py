@@ -23,5 +23,5 @@ def test_versions_agree():
     assert _find(PACKAGING / "rpm/chimp.spec", r"^Version:\s+(\S+)") == version
     assert _find(PACKAGING / "rpm/chimp.spec", r"^\* .* - (\S+)-\d+$") == version
     assert _find(PACKAGING / "debian/changelog", r"^chimp \(([^-)]+)-") == version
-    for page in ("chimp.1", "chimpd.1"):
+    for page in ("chimp.1", "chimpd.1", "chimp-loop.1"):
         assert _find(PACKAGING / "man" / page, r'^\.TH .* "chimp ([^"]+)"') == version

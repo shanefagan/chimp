@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QFileSystemWatcher, QObject, QTimer, Signal
+from PySide6.QtDBus import QDBusConnection, QDBusServiceWatcher
+from PySide6.QtGui import QGuiApplication
 
 from .. import protocol as p
 from ..device import Lpd8Device
@@ -32,6 +34,7 @@ from .obs import ObsClient
 from .overlay import OverlayModel
 
 CLIENT_NAME = "Chimp Service"
+LOOP_BUS_NAME = "com.performativenonsense.chimp.loop"  # Chimp Loop, while open
 LPD8_CLIENT = "LPD8 mk2"
 STATUS_PATH = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "chimp.json"
 
@@ -41,6 +44,7 @@ def log(*args) -> None:
 
 
 class DesktopController(QObject):
+    looping = False  # Chimp Loop is open (see __init__)
     stateChanged = Signal()  # connection, active program/profile, last action or pause changed
     audioEvent = Signal()  # a sink/source changed (emitted from the pulse event thread)
 
@@ -87,6 +91,21 @@ class DesktopController(QObject):
         self.hub = MidiHub(CLIENT_NAME, exclude={LPD8_CLIENT}, parent=self)
         self.hub.message.connect(self._on_generic)
         self.hub.devicesChanged.connect(self._on_devices_changed)
+
+        # While Chimp Loop is open, the other controllers are drum pads: leave them to it
+        # (the LPD8 keeps its desktop program, and the "no actions" hint stays quiet).
+        self._loop_watch = QDBusServiceWatcher(
+            LOOP_BUS_NAME,
+            QDBusConnection.sessionBus(),
+            QDBusServiceWatcher.WatchModeFlag.WatchForRegistration
+            | QDBusServiceWatcher.WatchModeFlag.WatchForUnregistration,
+            self,
+        )
+        self._loop_watch.serviceRegistered.connect(lambda _n: self._set_looping(True))
+        self._loop_watch.serviceUnregistered.connect(lambda _n: self._set_looping(False))
+        with contextlib.suppress(Exception):
+            iface = QDBusConnection.sessionBus().interface()
+            self.looping = bool(iface and iface.isServiceRegistered(LOOP_BUS_NAME).value())
 
         self._poll_timer = QTimer(self, interval=1000, timeout=self._poll)
         # Mute state for pad lights: pushed by PipeWire events when pulsectl is available,
@@ -225,9 +244,13 @@ class DesktopController(QObject):
         log("MIDI devices:", ", ".join(self.hub.devices) or "none")
         self._write_status()
 
+    def _set_looping(self, on: bool) -> None:
+        self.looping = on
+        log("Chimp Loop", "opened: other controllers are left to it" if on else "closed")
+
     def _on_generic(self, name: str, msg: list[int]) -> None:
         dev = self.cfg.devices.get(name)
-        if dev is None or not dev.enabled or self.paused:
+        if dev is None or not dev.enabled or self.paused or self.looping:
             return
         addr = _address(msg)
         if addr is None:
@@ -348,7 +371,7 @@ class DesktopController(QObject):
         MIDI-only program is normal and mustn't keep popping up a reminder."""
         others = self.cfg.slots_with_actions()
         slot = self.active or 1
-        if not others or not self.cfg.osd or self.cfg.actions(slot).active() or slot in self._informed:
+        if self.looping or not others or not self.cfg.osd or self.cfg.actions(slot).active() or slot in self._informed:
             return
         self._informed.add(slot)
         target = others[0]
@@ -479,7 +502,8 @@ def main() -> int:
     else:
         app = QCoreApplication(sys.argv)
     app.setApplicationName("chimpd")
-    app.setApplicationDisplayName("Chimp")
+    if isinstance(app, QGuiApplication):  # --no-tray / no display: a plain QCoreApplication
+        app.setApplicationDisplayName("Chimp")
     ctl = DesktopController()
     holder: dict = {}
     if type(app) is not QCoreApplication:

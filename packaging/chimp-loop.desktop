@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chimp Loop
+GenericName=Drum Looper
+Comment=Play a drum kit from your MIDI controller and loop it, quantised or not
+Exec=chimp-loop
+Icon=chimp
+Terminal=false
+Categories=AudioVideo;Audio;Midi;
+Keywords=drums;loop;looper;pads;beat;quantise;midi;lpd8;ko;
+StartupWMClass=chimp-loop

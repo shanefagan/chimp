@@ -83,6 +83,40 @@ Profiles are separate sets of actions for the same controls ("Desktop", "Streami
 Switch them from the tray icon's menu or give a button **Next/Previous profile**.
 **Use for desktop control** turns a whole device off (e.g. while playing the MicroFreak).
 
+## Chimp Loop: drums and loops without a DAW
+
+`chimp-loop` (or "Chimp Loop" in the launcher and the tray menu) plays a 16-sound drum kit
+from every controller and records what you play into a loop.
+
+- **Record** (Space): play; press again to close the loop. Its length is your take, and the
+  tempo is worked out from it (or pick 1–8 bars and it closes on its own, with a metronome).
+- **Record** again: overdub a layer. **Undo** (Backspace) removes the last layer,
+  **Clear** (Delete) starts over, **Play/Stop** (Enter).
+- **Quantise** (off, 1/4 to 1/32) is applied on playback, so you can change it or turn it off
+  after recording.
+- **Pads:** notes 36–51 play sounds 1–16, so an LPD8 program on notes 36–43 plays Kick, Snare,
+  Clap, Hi-hat, Open hat, Rim, Tom, Crash, and a KO II group plays the first 12.
+  **Assign pads** maps any pad to any sound.
+- **Controller buttons:** each looper control (record, play, undo, clear, quantise, metronome,
+  next kit) can be given to a button on a controller: a KO II key, a pad on a spare LPD8
+  program.
+- **Kits:** two are bundled (`drums1`, `drums2`). Add your own as a folder of WAVs in
+  `~/.local/share/chimp/kits/<name>/`. Files named `kick`, `snare_1`, `clap`, `hihat_1`,
+  `open_hihat`, `rim`, `tom_1`, `crash`, `snare_2`, `hihat_2`, `tom_2`, `tom_3`, `ride`,
+  `perc_1`, `perc_2` and `perc_3` go to those slots; others fill the gaps.
+- **Save** loops (`~/.local/share/chimp/loops/`), and **export** to `~/Music/Chimp/`:
+  - WAV, N repeats, looping seamlessly
+  - MIDI: General MIDI drum notes on channel 10, at the loop's tempo
+
+Pads trigger from rtmidi's own thread, not a polling timer. The looper asks PipeWire for a
+256-frame period (`PIPEWIRE_LATENCY=256/48000`, this process only), so a pad sounds about
+11 ms after you hit it (the default 1024-frame graph would make that ~40 ms). Hits are
+recorded where you heard them, with that latency taken off.
+
+While Chimp Loop is open, the desktop service leaves the other controllers to it: no
+desktop actions from the KO II's profile while you drum. The LPD8's desktop program still
+works; play drums on another program.
+
 ## LPD8 desktop control
 
 Every pad and knob tile has an **action** picker at the bottom. A program with actions

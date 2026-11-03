@@ -7,6 +7,7 @@ Each device is identified by its sequencer client name ("LPD8 mk2", "EP-133",
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 
 import rtmidi
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -29,10 +30,19 @@ class MidiHub(QObject):
     devicesChanged = Signal()
     message = Signal(str, object)  # device name, [status, data1, data2]
 
-    def __init__(self, client_name: str, exclude: set[str] | None = None, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        client_name: str,
+        exclude: set[str] | None = None,
+        parent: QObject | None = None,
+        realtime: Callable[[str, list[int]], None] | None = None,
+    ) -> None:
+        """realtime: called on rtmidi's own thread the moment a message arrives (the
+        looper's drums), instead of draining every 10 ms; `message` is still emitted."""
         super().__init__(parent)
         self._client_name = client_name
         self._exclude = set(exclude or ())
+        self._realtime = realtime
         self._probe = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA, name=f"{client_name} (probe)")
         # device -> {port name: open input}. A device only appears here once a port is open;
         # ports that failed to open (still being set up at hotplug) are retried every scan.
@@ -43,7 +53,8 @@ class MidiHub(QObject):
     def start(self) -> None:
         self.scan()
         self._scan_timer.start()
-        self._drain_timer.start()
+        if self._realtime is None:
+            self._drain_timer.start()
 
     def stop(self) -> None:
         self._scan_timer.stop()
@@ -94,6 +105,8 @@ class MidiHub(QObject):
                 m.ignore_types(sysex=True, timing=True, active_sense=True)
                 idx = m.get_ports().index(port)
                 m.open_port(idx, f"from {name}"[:60])
+                if self._realtime is not None:
+                    m.set_callback(self._on_callback, name)
             except (ValueError, rtmidi.SystemError, rtmidi.InvalidPortError):
                 if m is not None:
                     self._close_port(m)
@@ -101,6 +114,13 @@ class MidiHub(QObject):
             self._open.setdefault(name, {})[port] = m
             opened = True
         return opened
+
+    def _on_callback(self, event: tuple[list[int], float], name: str) -> None:
+        # rtmidi's thread: act now, then hand the message to the Qt thread.
+        msg = event[0]
+        with contextlib.suppress(Exception):  # never let an error kill rtmidi's thread
+            self._realtime(name, msg)
+        self.message.emit(name, msg)
 
     @staticmethod
     def _close_port(m: rtmidi.MidiIn) -> None:

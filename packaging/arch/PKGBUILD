@@ -16,6 +16,8 @@ depends=(
   'qt6-websockets'   # OBS WebSocket client
   'kirigami'         # UI components
   'python-rtmidi'    # ALSA sequencer MIDI
+  'python-numpy'     # Chimp Loop's mixer
+  'qt6-multimedia'   # Chimp Loop's audio output
   'pipewire'         # pw-dump
   'wireplumber'      # wpctl (fallback volume control)
   'gtk3'             # gtk-launch, for "Launch app" actions
@@ -50,10 +52,12 @@ package() {
   cd "$pkgname-$pkgver"
   python -m installer --destdir="$pkgdir" dist/*.whl
   install -Dm644 packaging/chimp.desktop "$pkgdir/usr/share/applications/chimp.desktop"
+  install -Dm644 packaging/chimp-loop.desktop "$pkgdir/usr/share/applications/chimp-loop.desktop"
   install -Dm644 chimp/icons/chimp.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/chimp.svg"
   install -Dm644 packaging/chimp.service "$pkgdir/usr/lib/systemd/user/chimp.service"
   install -Dm644 packaging/man/chimp.1 "$pkgdir/usr/share/man/man1/chimp.1"
   install -Dm644 packaging/man/chimpd.1 "$pkgdir/usr/share/man/man1/chimpd.1"
+  install -Dm644 packaging/man/chimp-loop.1 "$pkgdir/usr/share/man/man1/chimp-loop.1"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

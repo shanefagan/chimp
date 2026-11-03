@@ -49,7 +49,7 @@ deb_note=$(printf '%s\n' "$note" | fold -s -w 72 | sed -e 's/[[:space:]]*$//' -e
     cat "$deb"
 } > "$deb.tmp" && mv "$deb.tmp" "$deb"
 
-for page in packaging/man/chimp.1 packaging/man/chimpd.1; do
+for page in packaging/man/chimp.1 packaging/man/chimpd.1 packaging/man/chimp-loop.1; do
     sed -i "1s/\"[0-9-]*\" \"chimp [^\"]*\"/\"$(date +%Y-%m)\" \"chimp $new\"/" "$page"
 done
 

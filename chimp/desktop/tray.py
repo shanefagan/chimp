@@ -38,6 +38,9 @@ class Tray(QObject):
     def open_editor(self) -> None:
         system.spawn_app(["gtk-launch", "chimp"], "chimp")
 
+    def open_loop(self) -> None:
+        system.spawn_app(["gtk-launch", "chimp-loop"], "chimp-loop")
+
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.open_editor()
@@ -132,5 +135,6 @@ class Tray(QObject):
         pause.setChecked(self.ctl.paused)
         pause.toggled.connect(lambda on: QTimer.singleShot(0, lambda: self.ctl.set_paused(on)))
         menu.addAction(QIcon.fromTheme("chimp", self._base), "Open editor", self.open_editor)
+        menu.addAction(QIcon.fromTheme("media-playlist-repeat"), "Open Chimp Loop", self.open_loop)
         menu.addSeparator()
         menu.addAction(QIcon.fromTheme("application-exit"), "Quit until next login", QApplication.quit)

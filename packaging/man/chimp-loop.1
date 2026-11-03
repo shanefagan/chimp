@@ -1,0 +1,61 @@
+.TH CHIMP-LOOP 1 "2026-11" "chimp 0.6.1"
+.SH NAME
+chimp-loop \- play a drum kit from a MIDI controller and loop it
+.SH SYNOPSIS
+.B chimp-loop
+.br
+.B chimp-loop
+.B \-\-version
+.SH DESCRIPTION
+.B chimp-loop
+plays a 16-sound drum kit from every MIDI controller on the system and records
+what you play into a loop. Press Record, play, press Record again to close the
+loop (or pick a length in bars and it closes on its own); press Record again to
+overdub a layer, Undo to remove the last one. Quantise (1/4 to 1/32) is applied
+on playback, so it can be changed or turned off after recording.
+.PP
+Notes 36\(en51 play sounds 1\(en16 (an LPD8 program on notes 36\(en43 plays the first
+eight); any pad or button can be assigned to a sound or to a looper control.
+Loops can be saved, and exported as WAV or as a standard MIDI file (General MIDI
+drum notes on channel 10).
+.SH KEYS
+.TP
+.B Space
+Record, close the loop, overdub on/off.
+.TP
+.B Enter
+Play / stop.
+.TP
+.B Backspace
+Undo the last layer.
+.TP
+.BR Delete " or " Ctrl+Backspace
+Clear the loop.
+.TP
+.B T
+Tap tempo.
+.TP
+.B Z X C V, A S D F, Q W E R, 1 2 3 4
+Sounds 1\(en16, laid out like the pads.
+.SH FILES
+.TP
+.I ~/.config/chimp/loop.json
+Settings and assignments.
+.TP
+.I ~/.local/share/chimp/loops/
+Saved loops.
+.TP
+.I ~/.local/share/chimp/kits/<name>/
+Your own kits: a folder of WAVs. Files named kick, snare_1, clap, hihat_1,
+open_hihat, rim, tom_1, crash, snare_2, hihat_2, tom_2, tom_3, ride, perc_1,
+perc_2, perc_3 go to those slots; others fill the gaps.
+.TP
+.I ~/Music/Chimp/
+Exports.
+.SH ENVIRONMENT
+.TP
+.B PIPEWIRE_LATENCY
+Defaults to 256/48000 for this program, for about 11 ms from pad to sound.
+.SH SEE ALSO
+.BR chimp (1),
+.BR chimpd (1)
