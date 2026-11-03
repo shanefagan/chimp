@@ -1,8 +1,9 @@
-"""Drum kits: a folder of WAVs, 16 sounds, loaded into float32 stereo arrays.
+"""Drum kits: 16 sounds as float32 stereo arrays.
 
-Bundled kits live in chimp/loop/kits/<name>/, your own in ~/.local/share/chimp/kits/<name>/.
-Files named after the slots below land in those slots (kick.wav -> Kick); any other
-WAVs fill the free slots in name order.
+The built-in kit ("synth") is synthesised at startup (synth.py): no samples are shipped.
+Your own kits are folders of WAVs in ~/.local/share/chimp/kits/<name>/: files named after
+the slots below land in those slots (kick.wav -> Kick); any other WAVs fill the free slots
+in name order.
 """
 
 from __future__ import annotations
@@ -15,9 +16,8 @@ import numpy as np
 
 from ..desktop.config import DATA_DIR
 
-HERE = Path(__file__).resolve().parent
-BUNDLED_DIR = HERE / "kits"
 USER_DIR = DATA_DIR / "kits"
+BUILTIN = "synth"
 NUM_SOUNDS = 16
 
 # Slot order: the first 8 are what an 8-pad controller plays by default (LPD8 program 1,
@@ -60,14 +60,31 @@ class Kit:
 
 
 def kit_dirs() -> list[Path]:
-    """Every kit folder: bundled ones first, then yours (same name: yours wins)."""
-    found: dict[str, Path] = {}
-    for root in (BUNDLED_DIR, USER_DIR):
-        if root.is_dir():
-            for d in sorted(root.iterdir()):
-                if d.is_dir() and any(d.glob("*.wav")):
-                    found[d.name] = d
-    return list(found.values())
+    """Your kit folders (with at least one WAV), by name."""
+    if not USER_DIR.is_dir():
+        return []
+    return [d for d in sorted(USER_DIR.iterdir()) if d.is_dir() and any(d.glob("*.wav")) and d.name != BUILTIN]
+
+
+def kit_names() -> list[str]:
+    """The built-in kit first, then yours."""
+    return [BUILTIN] + [d.name for d in kit_dirs()]
+
+
+def load(name: str, rate: int) -> Kit:
+    if name == BUILTIN:
+        return synth_kit(rate)
+    return load_kit(USER_DIR / name, rate)
+
+
+def synth_kit(rate: int) -> Kit:
+    from . import synth
+
+    kit = Kit(BUILTIN, rate)
+    for i, data in enumerate(synth.sounds(rate)):
+        _stem, label, note = SLOTS[i]
+        kit.sounds[i] = Sound(label, note, data)
+    return kit
 
 
 def read_wav(path: Path, rate: int) -> np.ndarray:

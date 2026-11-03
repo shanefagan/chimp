@@ -11,3 +11,7 @@ packaging/arch/*.pkg.tar.*
 packaging/arch/*.tar.gz
 packaging/arch/*.log
 target/
+# Drum kits and samples are the user's own: they live in ~/.local/share/chimp/kits/
+assets/
+chimp/loop/kits/
+*.wav

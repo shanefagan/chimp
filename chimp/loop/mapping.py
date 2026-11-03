@@ -96,7 +96,7 @@ def describe(key: str) -> str:
 
 @dataclass
 class LoopSettings:
-    kit: str = "drums1"
+    kit: str = "synth"
     bpm: float = 120.0
     bars: int = 0
     quantise: int = 16

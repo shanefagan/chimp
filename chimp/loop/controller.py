@@ -27,7 +27,8 @@ from .engine import (
 )
 from .fx import DELAY_TIMES, GLITCHES, REVERB_MODES
 from .gamepad import Gamepads
-from .kit import NUM_SOUNDS, kit_dirs, load_kit
+from .kit import NUM_SOUNDS, kit_names
+from .kit import load as load_kit
 from .mapping import ACTIONS, HOLD_ACTIONS, LoopSettings, describe, key_of, release_of, value_of
 
 QUANTISE_LABELS = {0: "Off", 4: "1/4", 8: "1/8", 16: "1/16", 32: "1/32"}
@@ -63,7 +64,7 @@ class LoopController(QObject):
         super().__init__(parent)
         self.e = engine
         self.s = LoopSettings.load()
-        self._kits = kit_dirs()
+        self._kits = kit_names()
         self._kit_name = ""
         self._assigning = ""  # "sound:N", "action:name" or "param:p.x" while waiting for a control
         self._taps: list[float] = []
@@ -114,17 +115,21 @@ class LoopController(QObject):
         e.knob_page = s.knob_page if s.knob_page in KNOB_PAGES else "pad"
         if s.sound:
             e.apply_sound_settings(s.sound)
-        names = [d.name for d in self._kits]
-        self._load_kit(names.index(s.kit) if s.kit in names else 0)
+        self._load_kit(self._kits.index(s.kit) if s.kit in self._kits else 0)
 
     def _load_kit(self, index: int) -> None:
         if not self._kits:
             self.notify.emit("No drum kits found")
             return
-        d = self._kits[index % len(self._kits)]
-        self.e.set_kit(load_kit(d, self.e.rate))
-        self._kit_name = d.name
-        self.s.kit = d.name
+        name = self._kits[index % len(self._kits)]
+        try:
+            kit = load_kit(name, self.e.rate)
+        except (OSError, ValueError) as exc:
+            self.notify.emit(f"Couldn't load kit {name}: {exc}")
+            return
+        self.e.set_kit(kit)
+        self._kit_name = name
+        self.s.kit = name
 
     def _save_settings(self) -> None:
         with self.e.lock:
@@ -396,11 +401,11 @@ class LoopController(QObject):
 
     @Property("QStringList", notify=changed)
     def kitNames(self) -> list[str]:
-        return [d.name for d in self._kits]
+        return list(self._kits)
 
     @Property(int, notify=changed)
     def kitIndex(self) -> int:
-        names = [d.name for d in self._kits]
+        names = list(self._kits)
         return names.index(self._kit_name) if self._kit_name in names else 0
 
     @Property("QStringList", notify=changed)
@@ -530,7 +535,7 @@ class LoopController(QObject):
         except (OSError, ValueError) as exc:
             self.notify.emit(f"Couldn't open {name}: {exc}")
             return
-        names = [k.name for k in self._kits]
+        names = list(self._kits)
         if d.get("kit") in names and d["kit"] != self._kit_name:
             self._load_kit(names.index(d["kit"]))
         self.e.apply_sound_settings(d.get("sound") or {})
@@ -914,7 +919,7 @@ class LoopController(QObject):
         except (OSError, ValueError) as exc:
             self.notify.emit(f"Couldn't open {name}: {exc}")
             return
-        names = [k.name for k in self._kits]
+        names = list(self._kits)
         if d.get("kit") in names:
             self._load_kit(names.index(d["kit"]))
         files.from_dict(self.e, d)

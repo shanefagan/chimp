@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from chimp.loop.engine import Engine
-from chimp.loop.kit import NUM_SOUNDS, Kit, Sound, kit_dirs, load_kit
+from chimp.loop.kit import NUM_SOUNDS, Kit, Sound, kit_names, load
 
 RATE = 48000
 BLOCK = 256
@@ -48,13 +48,40 @@ def onsets(signal: np.ndarray) -> list[int]:
     return [int(i) for i in np.flatnonzero(signal > 0.25)]
 
 
-def test_bundled_kits_load_16_named_sounds():
-    names = [d.name for d in kit_dirs()]
-    assert {"drums1", "drums2"} <= set(names)
-    kit = load_kit(next(d for d in kit_dirs() if d.name == "drums1"), RATE)
-    assert all(kit.sounds)
-    assert kit.labels()[:4] == ["Kick", "Snare", "Clap", "Hi-hat"]
-    assert kit.sounds[0].data.dtype == np.float32 and kit.sounds[0].data.shape[1] == 2
+def test_built_in_kit_is_synthesised():
+    kit = load("synth", RATE)
+    assert all(kit.sounds) and kit.labels()[:4] == ["Kick", "Snare", "Clap", "Hi-hat"]
+    for s in kit.sounds:
+        assert s.data.dtype == np.float32 and s.data.shape[1] == 2 and len(s.data) > RATE // 20
+        assert np.isfinite(s.data).all() and 0.5 < np.abs(s.data).max() <= 0.9 + 1e-6
+    kick = kit.sounds[0].data[:, 0]
+    spec = np.abs(np.fft.rfft(kick)) ** 2
+    f = np.fft.rfftfreq(len(kick), 1 / RATE)
+    assert spec[f < 200].sum() / spec.sum() > 0.7  # a kick is low
+    hat = kit.sounds[3].data[:, 0]
+    spec = np.abs(np.fft.rfft(hat)) ** 2
+    f = np.fft.rfftfreq(len(hat), 1 / RATE)
+    assert spec[f > 5000].sum() / spec.sum() > 0.7  # a hat is high
+
+
+def test_your_kits_load_from_the_data_folder(tmp_path, monkeypatch):
+    import wave
+
+    from chimp.loop import kit as kitmod
+
+    folder = tmp_path / "heavy"
+    folder.mkdir()
+    for stem in ("kick", "snare_1", "zap"):
+        with wave.open(str(folder / f"{stem}.wav"), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(44100)
+            w.writeframes((np.sin(np.arange(4410) / 10) * 20000).astype("<i2").tobytes())
+    monkeypatch.setattr(kitmod, "USER_DIR", tmp_path)
+    assert kit_names() == ["synth", "heavy"]
+    kit = load("heavy", RATE)
+    assert kit.labels()[:3] == ["Kick", "Snare", "Zap"]  # named slots, then the rest in order
+    assert len(kit.sounds[0].data) == 4800  # 44.1 kHz resampled to 48
 
 
 def test_free_take_sets_length_and_plays_hits_where_they_were_heard():
