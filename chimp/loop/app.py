@@ -67,6 +67,8 @@ def main() -> int:
 
     out.start()
     ctl.start()
+    if os.environ.get("CHIMP_LOOP_OPEN"):  # dev aid: open a saved loop
+        ctl.loadLoop(os.environ["CHIMP_LOOP_OPEN"])
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     tick = QTimer(interval=250, timeout=lambda: None)  # lets Python see Ctrl+C
     tick.start()

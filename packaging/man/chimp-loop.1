@@ -8,21 +8,29 @@ chimp-loop \- play a drum kit from a MIDI controller and loop it
 .B \-\-version
 .SH DESCRIPTION
 .B chimp-loop
-plays a 16-sound drum kit from every MIDI controller on the system and records
-what you play into a loop. Press Record, play, press Record again to close the
-loop (or pick a length in bars and it closes on its own); press Record again to
-overdub a layer, Undo to remove the last one. Quantise (1/4 to 1/32) is applied
-on playback, so it can be changed or turned off after recording.
+is a drum machine for any MIDI controller: 16 parts, live looping and step entry on one
+pattern, a sound per pad and a master bus.
+.PP
+Press Record, play, press Record again to close the loop (or pick a length in bars and it
+closes on its own); press Record again to overdub a layer, Undo to remove the last one.
+The step grid (16 steps a bar) toggles hits and cycles their velocity. Quantise (1/4 to
+1/32) and swing are applied on playback, so they can change after recording.
+.PP
+Each pad has level, pan, pitch, attack, sustain, decay, a resonant low/high/band-pass
+filter, drive (soft, hard, fuzz, crush), punch, reverse, and sends to the master delay
+and reverb. The master has a tempo-synced ping-pong delay, a reverb (hall, octave-up
+or octave-down shimmer, reverse), drive, a resonant DJ filter, a compressor and a
+brick-wall limiter, with presets.
 .PP
 Notes 36\(en51 play sounds 1\(en16 (an LPD8 program on notes 36\(en43 plays the first
-eight); any pad or button can be assigned to a sound or to a looper control.
-Loops can be saved, and exported as WAV or as a standard MIDI file (General MIDI
-drum notes on channel 10).
+eight); any pad or button can be assigned to a sound or to a looper control. Loops can
+be saved, and exported as WAV or as a standard MIDI file (General MIDI drum notes on
+channel 10).
 .SH KNOBS
-Eight parameters, on CC 70\(en77 (the LPD8 mk2's knobs out of the box) or on any knob
-or fader assigned in the window: Filter (centre off, left low-pass, right high-pass),
-Delay, Echoes (delay feedback), Reverb, Swing, Pitch and Decay of the last sound played,
-and Volume. Pad velocity is recorded unless Fixed velocity is on. While the LPD8 is on a
+CC 70\(en77 (the LPD8 mk2's knobs out of the box) are eight knobs on a page: the selected
+pad (level, pitch, attack, decay, cutoff, resonance, drive, reverb send) or the master
+(filter, resonance, drive, delay, echoes, reverb, size, compress). K switches page. Any
+parameter can be given its own knob or fader in the window. While the LPD8 is on a
 program with desktop actions (see
 .BR chimpd (1)),
 the looper ignores it.
@@ -42,6 +50,9 @@ Clear the loop.
 .TP
 .B T
 Tap tempo.
+.TP
+.B K
+Switch the knob page (pad / master).
 .TP
 .B Z X C V, A S D F, Q W E R, 1 2 3 4
 Sounds 1\(en16, laid out like the pads.

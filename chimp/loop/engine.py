@@ -7,6 +7,11 @@ Timing: a hit is recorded where it was *heard*. The output plays a block `latenc
 frames after rendering it, so a pad hit at wall-clock time t lines up with frame
 block_playhead + (t - block_time) * rate - latency. Quantise is applied on playback,
 not stored, so it can be changed or turned off after recording.
+
+Sound: each pad has its own settings (voice.py: pitch, envelope, filter, drive,
+punch, reverse, level, pan, sends); the master bus (fx.py) adds delay, reverb, drive,
+filter, compression and limiting over everything. Both are turned with string ids:
+"p.<name>" for the selected pad, "m.<name>" for the master.
 """
 
 from __future__ import annotations
@@ -17,7 +22,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .fx import Chain
+from . import voice
+from .fx import DELAY_TIMES, REVERB_MODES, Master
 from .kit import NUM_SOUNDS, Kit
 
 # Closing these chokes the open hi-hat, as on a real kit.
@@ -25,22 +31,60 @@ OPEN_HAT = 4
 CLOSES_HAT = (3, 9)
 MAX_VOICES = 48
 QUANTISE_STEPS = (0, 4, 8, 16, 32)  # 0 = off; else notes per bar (4 = quarter notes)
-
-# What knobs can turn, 0-1 each: (id, label, default). Pitch and decay act on the
-# selected sound (the last pad hit or clicked).
-PARAMS: list[tuple[str, str, float]] = [
-    ("filter", "Filter", 0.5),
-    ("delay", "Delay", 0.0),
-    ("feedback", "Echoes", 0.4),
-    ("reverb", "Reverb", 0.0),
-    ("swing", "Swing", 0.0),
-    ("pitch", "Pitch", 0.5),
-    ("decay", "Decay", 1.0),
-    ("volume", "Volume", 0.8),
-]
-PARAM_IDS = [p[0] for p in PARAMS]
+STEPS_PER_BAR = 16
 MAX_SWING = 0.5  # of a grid step: 0.33 is a triplet feel
-VARIANT_CACHE = 64
+
+MASTER_KNOBS: dict[str, tuple[str, float]] = {
+    "filter": ("Filter", 0.5),
+    "resonance": ("Resonance", 0.2),
+    "drive": ("Drive", 0.0),
+    "delay": ("Delay", 0.0),
+    "echoes": ("Echoes", 0.4),
+    "reverb": ("Reverb", 0.0),
+    "size": ("Size", 0.5),
+    "tone": ("Tone", 0.4),
+    "shimmer": ("Shimmer", 0.0),
+    "comp": ("Compress", 0.0),
+    "limit": ("Limit", 0.0),
+    "swing": ("Swing", 0.0),
+    "volume": ("Volume", 0.8),
+}
+MASTER_CHOICES: dict[str, tuple[str, object, tuple]] = {
+    "drive_type": ("Drive", "soft", voice.dsp.DRIVE_TYPES),
+    "delay_time": ("Delay time", 3, tuple(range(len(DELAY_TIMES)))),
+    "pingpong": ("Ping-pong", True, (False, True)),
+    "reverb_mode": ("Reverb", "hall", tuple(m for m, _ in REVERB_MODES)),
+    "comp_speed": ("Compressor", "slow", ("slow", "fast")),
+}
+# What the LPD8's eight knobs (CC 70-77) turn, page by page.
+KNOB_PAGES: dict[str, list[str]] = {
+    "pad": ["p.level", "p.pitch", "p.attack", "p.decay", "p.cutoff", "p.resonance", "p.drive", "p.reverb"],
+    "master": ["m.filter", "m.resonance", "m.drive", "m.delay", "m.echoes", "m.reverb", "m.size", "m.comp"],
+}
+# Starting points for the master section (pads are left as they are).
+PRESETS: dict[str, dict] = {
+    "Clean": {},
+    "Abyss": {
+        "reverb_mode": "sink", "reverb": 0.45, "size": 0.78, "tone": 0.22, "shimmer": 0.5,
+        "delay": 0.25, "echoes": 0.45, "delay_time": 5, "pingpong": True,
+        "drive_type": "fuzz", "drive": 0.12, "comp": 0.45, "comp_speed": "slow", "limit": 0.35,
+    },
+    "Bloom": {
+        "reverb_mode": "rise", "reverb": 0.4, "size": 0.7, "tone": 0.55, "shimmer": 0.6,
+        "delay": 0.2, "echoes": 0.35, "delay_time": 3, "comp": 0.3, "limit": 0.2,
+    },
+    "Reverse swell": {"reverb_mode": "reverse", "reverb": 0.5, "size": 0.62, "tone": 0.35, "comp": 0.3, "limit": 0.2},
+    "Crushed": {
+        "drive_type": "crush", "drive": 0.45, "comp": 0.7, "comp_speed": "fast", "limit": 0.5,
+        "reverb_mode": "hall", "reverb": 0.15, "size": 0.3, "tone": 0.4,
+    },
+}  # fmt: skip
+
+
+def master_defaults() -> dict:
+    d: dict = {k: v for k, (_label, v) in MASTER_KNOBS.items()}
+    d.update({k: v for k, (_label, v, _opts) in MASTER_CHOICES.items()})
+    return d
 
 
 @dataclass
@@ -52,10 +96,11 @@ class Hit:
 
 
 class _Voice:
-    __slots__ = ("data", "delay", "gain", "pos", "slot")
+    __slots__ = ("data", "delay", "dry", "dsend", "pos", "rsend", "slot")
 
-    def __init__(self, data: np.ndarray, gain: float, delay: int, slot: int) -> None:
-        self.data, self.gain, self.delay, self.pos, self.slot = data, gain, delay, 0, slot
+    def __init__(self, data: np.ndarray, dry: np.ndarray, dsend: np.ndarray, rsend: np.ndarray, delay: int, slot: int):
+        self.data, self.dry, self.dsend, self.rsend = data, dry, dsend, rsend
+        self.delay, self.pos, self.slot = delay, 0, slot
 
 
 def _click(rate: int, freq: float, ms: float = 25.0) -> np.ndarray:
@@ -69,11 +114,10 @@ class Engine:
     """state: "empty" (nothing recorded), "recording" (first take), "playing",
     "overdub" (playing and adding a layer), "stopped" (a loop, not playing)."""
 
-    def __init__(self, rate: int = 44100) -> None:
+    def __init__(self, rate: int = 44100, background: bool = True) -> None:
         self.rate = rate
         self.lock = threading.RLock()
         self.kit: Kit | None = None
-        self.volume = 0.8
         self.bpm = 120.0
         self.bars = 0  # 0 = free length (set by when you close the first take)
         self.quantise = 16
@@ -85,21 +129,40 @@ class Engine:
         self.playhead = 0
         self.abs = 0  # frames rendered since start; never wraps
         self.revision = 0  # bumps on every change the UI should redraw for
+        self.selected = 0  # the pad "p." settings act on (last hit or clicked)
+        self.fixed_velocity = False
+        self.knob_page = "pad"
+        self.pads = [voice.default_pad() for _ in range(NUM_SOUNDS)]
+        self.master_settings = master_defaults()
+        self.master = Master(rate)
+        self._apply_master()
+        self._pad_version = [0] * NUM_SOUNDS
+        self._ready: list[tuple[int, np.ndarray | None]] = [(0, None)] * NUM_SOUNDS
         self._voices: list[_Voice] = []
         self._pending: list[tuple[int, float]] = []
         self._block_time = time.monotonic()
         self._block_playhead = 0
         self._block_abs = 0
         self._clicks = (_click(rate, 1760.0), _click(rate, 1175.0))  # bar, beat
-        self.fx = Chain(rate)
-        self.swing = 0.0  # 0-1 of MAX_SWING
-        self.pitch = [0.0] * NUM_SOUNDS  # semitones, -12..+12
-        self.decay = [1.0] * NUM_SOUNDS  # 1 = the sample's own length
-        self.selected = 0  # the sound pitch/decay knobs act on
-        self.fixed_velocity = False
-        self._variants: dict[tuple, np.ndarray] = {}
+        self._builder = voice.Builder(self._job, self._built, NUM_SOUNDS, rate) if background else None
+
+    def close(self) -> None:
+        if self._builder:
+            self._builder.stop()
 
     # --- timing helpers ----------------------------------------------------------
+
+    @property
+    def volume(self) -> float:
+        return self.master_settings["volume"]
+
+    @volume.setter
+    def volume(self, v: float) -> None:
+        self.set_master("volume", v)
+
+    @property
+    def swing(self) -> float:
+        return self.master_settings["swing"]
 
     def beat_frames(self) -> float:
         return self.rate * 60.0 / self.bpm
@@ -109,6 +172,9 @@ class Engine:
 
     def grid_frames(self) -> float:
         return self.bar_frames() / self.quantise if self.quantise else 0.0
+
+    def step_frames(self) -> float:
+        return self.bar_frames() / STEPS_PER_BAR
 
     def placed(self, t: int) -> int:
         """Where a hit plays: snapped to the grid if quantising, inside the loop."""
@@ -130,20 +196,171 @@ class Engine:
     def _changed(self) -> None:
         self.revision += 1
 
-    # --- playing and recording ----------------------------------------------------
+    # --- pads ----------------------------------------------------------------------
 
     def set_kit(self, kit: Kit) -> None:
         with self.lock:
             self.kit = kit
             self._voices.clear()
+            self._pad_version = [v + 1 for v in self._pad_version]
             self._changed()
+        self._rebuild()
+
+    def _job(self, i: int):
+        with self.lock:
+            s = self.kit.sounds[i] if self.kit else None
+            if s is None or self._ready[i][0] == self._pad_version[i]:
+                return None
+            return self._pad_version[i], s.data, dict(self.pads[i])
+
+    def _built(self, i: int, version: int, data: np.ndarray | None) -> None:
+        with self.lock:
+            if version >= self._ready[i][0]:
+                self._ready[i] = (version, data)
+
+    def _rebuild(self, now: bool = False) -> None:
+        if self._builder and not now:
+            self._builder.kick()
+        else:
+            for i in range(NUM_SOUNDS):
+                job = self._job(i)
+                if job:
+                    v, raw, pad = job
+                    self._built(i, v, voice.render(raw, pad, self.rate) if voice.shaped(pad) else None)
+
+    def wait_built(self, timeout: float = 5.0) -> bool:
+        """Until every pad's sample matches its settings (tests, exports)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            with self.lock:
+                if all(self._ready[i][0] == self._pad_version[i] for i in range(NUM_SOUNDS)):
+                    return True
+            self._rebuild()
+            time.sleep(0.005)
+        return False
+
+    def set_pad(self, i: int, key: str, value) -> None:
+        with self.lock:
+            pad = self.pads[i]
+            if key in voice.PAD_KNOBS:
+                value = max(0.0, min(1.0, float(value)))
+            elif key == "filter_type" and value != pad["filter_type"]:
+                pad["cutoff"] = voice.OPEN_CUTOFF.get(value, 1.0)  # switching type starts it open
+            if pad.get(key) == value:
+                return
+            pad[key] = value
+            if key not in voice.MIX_ONLY:
+                self._pad_version[i] += 1
+            self._changed()
+        if key not in voice.MIX_ONLY:
+            self._rebuild()
+
+    def _data(self, i: int) -> np.ndarray | None:
+        s = self.kit.sounds[i] if self.kit else None
+        if s is None:
+            return None
+        built = self._ready[i][1]
+        if voice.shaped(self.pads[i]):
+            return built if built is not None else s.data
+        return s.data
+
+    # --- master --------------------------------------------------------------------
+
+    def set_master(self, key: str, value) -> None:
+        with self.lock:
+            if key in MASTER_KNOBS:
+                value = max(0.0, min(1.0, float(value)))
+            self.master_settings[key] = value
+            self._apply_master()
+            self._changed()
+
+    def _apply_master(self) -> None:
+        m, s = self.master, self.master_settings
+        m.filter_value, m.resonance = s["filter"], s["resonance"]
+        m.drive, m.drive_type = s["drive"], s["drive_type"]
+        m.delay.mix, m.delay.feedback = s["delay"], s["echoes"] * 0.9
+        m.delay.time, m.delay.pingpong = int(s["delay_time"]), bool(s["pingpong"])
+        m.reverb.mix, m.reverb.size, m.reverb.tone = s["reverb"], s["size"], s["tone"]
+        m.reverb.shimmer, m.reverb.mode = s["shimmer"], s["reverb_mode"]
+        m.comp.amount, m.comp.speed = s["comp"], s["comp_speed"]
+        m.limiter.drive = s["limit"]
+        m.volume = s["volume"]
+
+    def apply_preset(self, name: str) -> None:
+        with self.lock:
+            keep = {k: self.master_settings[k] for k in ("swing", "volume")}
+            self.master_settings = {**master_defaults(), **PRESETS.get(name, {}), **keep}
+            self._apply_master()
+            self._changed()
+
+    # --- one interface for knobs: "p.<key>" (selected pad) and "m.<key>" ----------------
+
+    def get_param(self, pid: str):
+        scope, key = pid.split(".", 1)
+        return self.pads[self.selected][key] if scope == "p" else self.master_settings[key]
+
+    def set_param(self, pid: str, value) -> None:
+        scope, key = pid.split(".", 1)
+        if scope == "p":
+            self.set_pad(self.selected, key, value)
+        else:
+            self.set_master(key, value)
+
+    def knob_target(self, k: int) -> str:
+        """What LPD8 knob k (0-7) turns on the current page."""
+        return KNOB_PAGES[self.knob_page][k]
+
+    def sound_settings(self) -> dict:
+        """Everything about how the loop sounds, besides its hits (saved with it)."""
+        with self.lock:
+            return {"pads": [dict(p) for p in self.pads], "master": dict(self.master_settings)}
+
+    def apply_sound_settings(self, d: dict) -> None:
+        with self.lock:
+            pads = d.get("pads")
+            if isinstance(pads, list) and len(pads) == NUM_SOUNDS:
+                for i, p in enumerate(pads):
+                    fresh = voice.default_pad()
+                    fresh.update({k: v for k, v in p.items() if k in fresh})
+                    self.pads[i] = fresh
+                    self._pad_version[i] += 1
+            master = d.get("master")
+            if isinstance(master, dict):
+                fresh = master_defaults()
+                fresh.update({k: v for k, v in master.items() if k in fresh})
+                self.master_settings = fresh
+                self._apply_master()
+            self._changed()
+        self._rebuild()
+
+    def copy_for_render(self) -> Engine:
+        """A separate engine with this loop and its sound, for offline export."""
+        with self.lock:
+            off = Engine(self.rate, background=False)
+            off.kit, off.bpm, off.quantise, off.bars = self.kit, self.bpm, self.quantise, self.bars
+            off.metronome = False
+            off.apply_sound_settings(self.sound_settings())
+            off.layers = [[Hit(h.t, h.sound, h.vel, -(10**12)) for h in layer] for layer in self.layers]
+            off.length, off.state = self.length, "playing"
+        off._rebuild(now=True)
+        return off
+
+    # --- playing and recording ----------------------------------------------------
+
+    def select(self, sound: int) -> None:
+        with self.lock:
+            if 0 <= sound < NUM_SOUNDS and sound != self.selected:
+                self.selected = sound
+                self._changed()
 
     def trigger(self, sound: int, vel: float = 1.0, now: float | None = None) -> None:
         with self.lock:
             if not (0 <= sound < NUM_SOUNDS) or self.kit is None or self.kit.sounds[sound] is None:
                 return
             vel = 1.0 if self.fixed_velocity else max(0.0, min(1.0, vel))
-            self.selected = sound
+            if self.selected != sound:
+                self.selected = sound
+                self._changed()
             self._pending.append((sound, vel))
             if self.state not in ("recording", "overdub"):
                 return
@@ -251,119 +468,79 @@ class Engine:
             self.state = "stopped" if length else "empty"
             self._changed()
 
+    # --- step sequencer -------------------------------------------------------------
+
+    def steps(self) -> int:
+        """Steps in the loop (16 a bar); for an empty loop, what it will be."""
+        if self.length:
+            return max(1, round(self.length / self.step_frames()))
+        return max(1, self.bars or 1) * STEPS_PER_BAR
+
+    def step_of(self, t: int) -> int:
+        return round(t / self.step_frames()) % self.steps()
+
+    def grid(self, page: int) -> list[list[float]]:
+        """[sound][step in this page] -> velocity (0 = empty), a bar (16 steps) per page."""
+        with self.lock:
+            cells = [[0.0] * STEPS_PER_BAR for _ in range(NUM_SOUNDS)]
+            if not self.length:
+                return cells
+            first = page * STEPS_PER_BAR
+            for layer in self.layers:
+                for h in layer:
+                    k = self.step_of(h.t) - first
+                    if 0 <= k < STEPS_PER_BAR:
+                        cells[h.sound][k] = max(cells[h.sound][k], h.vel)
+            return cells
+
+    def toggle_step(self, sound: int, step: int, vel: float = 0.8) -> None:
+        """Step entry, as on a drum machine: a step with this sound on it is cleared,
+        an empty one gets a hit. An empty loop becomes `bars` bars (1 if free) first."""
+        with self.lock:
+            if self.state == "recording":
+                return
+            if not self.length:
+                self.length = round(max(1, self.bars or 1) * self.bar_frames())
+                self.layers = []
+                self.playhead = 0
+                self.state = "stopped"
+            found = False
+            for layer in self.layers:
+                keep = [h for h in layer if not (h.sound == sound and self.step_of(h.t) == step)]
+                found = found or len(keep) != len(layer)
+                layer[:] = keep
+            self._drop_empty_layers(keep_last=self.state == "overdub")
+            if not found:
+                hit = Hit(round(step * self.step_frames()), sound, vel, -(10**12))
+                if self.state == "overdub" and self.layers:
+                    self.layers[-1].append(hit)
+                else:
+                    self.layers.append([hit])  # its own layer: Undo takes it back
+            self._changed()
+
+    def set_step_velocity(self, sound: int, step: int, vel: float) -> None:
+        with self.lock:
+            for layer in self.layers:
+                for h in layer:
+                    if h.sound == sound and self.step_of(h.t) == step:
+                        h.vel = max(0.05, min(1.0, vel))
+            self._changed()
+
     # --- rendering -----------------------------------------------------------------
 
     def _start(self, sound: int, vel: float, delay: int) -> None:
-        kit = self.kit
-        s = kit.sounds[sound] if kit else None
-        if s is None:
+        data = self._data(sound)
+        if data is None:
             return
         if sound in CLOSES_HAT:
             self._voices = [v for v in self._voices if v.slot != OPEN_HAT]
         if len(self._voices) >= MAX_VOICES:
             self._voices.pop(0)
-        self._voices.append(_Voice(self._variant(sound, s.data), vel, delay, sound))
-
-    def _variant(self, sound: int, data: np.ndarray) -> np.ndarray:
-        """The sample with this sound's pitch and decay (cached)."""
-        pitch = round(self.pitch[sound] * 4) / 4
-        decay = round(self.decay[sound], 2)
-        if pitch == 0 and decay >= 1.0:
-            return data
-        key = (id(data), pitch, decay)
-        v = self._variants.get(key)
-        if v is None:
-            v = data
-            if pitch:
-                ratio = 2.0 ** (pitch / 12)
-                pos = np.arange(0, len(v) - 1, ratio)
-                idx = np.arange(len(v))
-                v = np.stack([np.interp(pos, idx, v[:, c]) for c in (0, 1)], axis=1).astype(np.float32)
-            if decay < 1.0:
-                t = np.arange(len(v), dtype=np.float32) / self.rate
-                tau = 0.015 + 0.6 * decay**2  # seconds
-                env = np.exp(-t / tau)
-                cut = int(np.searchsorted(-env, -1e-3))  # where it's inaudible
-                v = (v * env[:, None])[: max(64, cut)].copy()
-                v[-64:] *= np.linspace(1, 0, 64, dtype=np.float32)[:, None]
-            if len(self._variants) >= VARIANT_CACHE:
-                self._variants.pop(next(iter(self._variants)))
-            self._variants[key] = v
-        return v
-
-    # --- knobs ---------------------------------------------------------------------
-
-    def get_param(self, name: str) -> float:
-        fx = self.fx
-        return {
-            "filter": lambda: fx.filter.value,
-            "delay": lambda: fx.delay.mix,
-            "feedback": lambda: fx.delay.feedback / 0.9,
-            "reverb": lambda: fx.reverb.mix,
-            "swing": lambda: self.swing,
-            "pitch": lambda: (self.pitch[self.selected] + 12) / 24,
-            "decay": lambda: self.decay[self.selected],
-            "volume": lambda: self.volume,
-        }[name]()
-
-    def set_param(self, name: str, v: float) -> None:
-        v = max(0.0, min(1.0, float(v)))
-        fx = self.fx
-        if name == "filter":
-            fx.filter.value = v
-        elif name == "delay":
-            fx.delay.mix = v
-        elif name == "feedback":
-            fx.delay.feedback = v * 0.9
-        elif name == "reverb":
-            fx.reverb.mix = v
-        elif name == "swing":
-            self.swing = v
-        elif name == "pitch":
-            self.pitch[self.selected] = round((v * 24 - 12) * 4) / 4
-        elif name == "decay":
-            self.decay[self.selected] = max(0.02, v)
-        elif name == "volume":
-            self.volume = v
-        self._changed()
-
-    def sound_settings(self) -> dict:
-        """What makes a loop sound the way it does, besides its hits (saved with it)."""
-        return {
-            "pitch": list(self.pitch),
-            "decay": list(self.decay),
-            "swing": self.swing,
-            "fx": {p: self.get_param(p) for p in ("filter", "delay", "feedback", "reverb")},
-        }
-
-    def apply_sound_settings(self, d: dict) -> None:
-        with self.lock:
-            if len(d.get("pitch", [])) == NUM_SOUNDS:
-                self.pitch = [float(x) for x in d["pitch"]]
-            if len(d.get("decay", [])) == NUM_SOUNDS:
-                self.decay = [float(x) for x in d["decay"]]
-            self.swing = float(d.get("swing", self.swing))
-            for k, v in (d.get("fx") or {}).items():
-                if k in PARAM_IDS:
-                    self.set_param(k, v)
-            self._changed()
-
-    def copy_for_render(self) -> Engine:
-        """A separate engine with this loop and its sound, for offline export."""
-        with self.lock:
-            off = Engine(self.rate)
-            off.kit, off.volume, off.bpm, off.quantise, off.bars = (
-                self.kit,
-                self.volume,
-                self.bpm,
-                self.quantise,
-                self.bars,
-            )
-            off.metronome = False
-            off.apply_sound_settings(self.sound_settings())
-            off.layers = [[Hit(h.t, h.sound, h.vel, -(10**12)) for h in layer] for layer in self.layers]
-            off.length, off.state = self.length, "playing"
-            return off
+        p = self.pads[sound]
+        angle = p["pan"] * np.pi / 2  # constant-power pan
+        level = vel * (p["level"] / 0.8) ** 2 * 0.8
+        dry = np.array([np.cos(angle), np.sin(angle)], np.float32) * np.float32(level * np.sqrt(2))
+        self._voices.append(_Voice(data, dry, dry * p["delay"], dry * p["reverb"], delay, sound))
 
     def _schedule(self, start: int, n: int) -> None:
         """Start the loop's hits (and metronome clicks) that fall in [start, start+n)."""
@@ -386,17 +563,20 @@ class Engine:
 
     def _clicks_in(self, spans) -> None:
         beat = self.beat_frames()
+        zero = np.zeros(2, np.float32)
         for a, b, off in spans:
             k = int(np.ceil(a / beat))
             while k * beat < b:
                 p = round(k * beat)
                 if a <= p < b:
                     data = self._clicks[0] if k % 4 == 0 else self._clicks[1]
-                    self._voices.append(_Voice(data, 1.0, off + p - a, -1))
+                    self._voices.append(_Voice(data, np.ones(2, np.float32), zero, zero, off + p - a, -1))
                 k += 1
 
     def render(self, n: int) -> np.ndarray:
-        out = np.zeros((n, 2), dtype=np.float32)
+        dry = np.zeros((n, 2), dtype=np.float32)
+        dsend = np.zeros((n, 2), dtype=np.float32)
+        rsend = np.zeros((n, 2), dtype=np.float32)
         clicks = np.zeros((n, 2), dtype=np.float32)
         with self.lock:
             self._block_time = time.monotonic()
@@ -419,7 +599,7 @@ class Engine:
                 self.playhead %= self.length
             elif self.state in ("stopped", "empty"):
                 self.playhead = 0
-            volume = self.volume
+            beat = self.beat_frames()
         alive = []
         for v in voices:
             if v.delay >= n:
@@ -427,8 +607,15 @@ class Engine:
                 alive.append(v)
                 continue
             take = v.data[v.pos : v.pos + n - v.delay]
-            dest = clicks if v.slot < 0 else out
-            dest[v.delay : v.delay + len(take)] += take * v.gain
+            sl = slice(v.delay, v.delay + len(take))
+            if v.slot < 0:
+                clicks[sl] += take
+            else:
+                dry[sl] += take * v.dry
+                if v.dsend.any():
+                    dsend[sl] += take * v.dsend
+                if v.rsend.any():
+                    rsend[sl] += take * v.rsend
             v.pos += len(take)
             v.delay = 0
             if v.pos < len(v.data):
@@ -436,9 +623,7 @@ class Engine:
         with self.lock:
             # Keep voices started meanwhile (by trigger) and drop finished/choked ones.
             self._voices = [v for v in self._voices if v in alive or v not in voices]
-        self.fx.delay.frames = round(self.beat_frames() * 0.75)  # a dotted eighth
-        out = self.fx.process(out)
-        out += clicks
-        out *= volume
+        out = self.master.process(dry, dsend, rsend, beat)
+        out += clicks * 0.8
         np.clip(out, -1.0, 1.0, out=out)
         return out

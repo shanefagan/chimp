@@ -123,25 +123,47 @@ def after_button() -> None:
         mid[:4] == b"MThd" and mid.count(b"\x99\x24") == 2 and mid.count(b"\x99\x26") == 2,
         "MIDI file: 2 kicks, 2 snares on ch 10",
     )
-    # knobs: LPD8 default CCs act at once (MIDI thread), learning moves a parameter
-    port.send_message([0xB0, 71, 64])  # knob 2: delay
+    # knobs: CC 70-77 follow the knob page and act at once (MIDI thread)
+    ctl.setKnobPage("master")
+    port.send_message([0xB0, 73, 64])  # knob 4 on the master page: delay
     port.send_message([0xB0, 70, 0])  # knob 1: filter all the way down
 
 
 def after_knobs() -> None:
-    check(abs(e.fx.delay.mix - 64 / 127) < 1e-6, f"CC 71 turned the delay ({e.fx.delay.mix:.2f})")
-    check(e.fx.filter.value == 0.0 and "LP 150 Hz" in [p["text"] for p in ctl.params], "CC 70 turned the filter")
-    ctl.assign("param:reverb")
+    check(abs(e.master.delay.mix - 64 / 127) < 1e-6, f"CC 73 turned the master delay ({e.master.delay.mix:.2f})")
+    texts = {p["id"]: p["text"] for p in ctl.masterParams}
+    check(
+        e.master.filter_value == 0.0 and texts["m.filter"] == "LP 80 Hz",
+        f"CC 70 turned the filter ({texts['m.filter']})",
+    )
+    ctl.setKnobPage("pad")
+    ctl.selectPad(1)
+    port.send_message([0xB0, 70, 32])  # knob 1 on the pad page: the selected pad's level
+
+
+def after_pad_knob() -> None:
+    check(
+        abs(e.pads[1]["level"] - 32 / 127) < 1e-6 and e.pads[0]["level"] == 0.8,
+        "pad page: knob 1 = selected pad's level",
+    )
+    ctl.assign("param:m.reverb")
     port.send_message([0xB0, 21, 5])
 
 
 def after_learn() -> None:
-    check(ctl.s.assign.get("Test Pads", {}).get("cc:1:21") == "param:reverb", "CC 21 learned for reverb")
+    check(ctl.s.assign.get("Test Pads", {}).get("cc:1:21") == "param:m.reverb", "CC 21 learned for master reverb")
     port.send_message([0xB0, 21, 127])
 
 
 def after_learned_knob() -> None:
-    check(e.fx.reverb.mix == 1.0, f"learned knob turns reverb ({e.fx.reverb.mix})")
+    check(e.master.reverb.mix == 1.0, f"learned knob turns reverb ({e.master.reverb.mix})")
+    # step entry through the controller's slots
+    ctl.runAction("clear")
+    ctl.toggleStep(0, 0)
+    ctl.toggleStep(1, 4)
+    ctl.cycleStepVelocity(1, 4)
+    cells = ctl.gridCells
+    check(cells[0][0] == 0.8 and cells[1][4] == 1.0 and e.state == "stopped", "step entry and accent")
     stop.set()
     ctl.stop()
     app.quit()
@@ -155,7 +177,10 @@ def chain(*steps) -> None:
 
 
 QTimer.singleShot(
-    2000, lambda: chain(script, after_take, after_assign, after_button, after_knobs, after_learn, after_learned_knob)
+    2000,
+    lambda: chain(
+        script, after_take, after_assign, after_button, after_knobs, after_pad_knob, after_learn, after_learned_knob
+    ),
 )
 QTimer.singleShot(12000, app.quit)
 app.exec()

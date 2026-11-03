@@ -1,5 +1,5 @@
 """The Loop window's view of the engine: properties for QML, slots for buttons and keys,
-and the MIDI path (pads -> sounds and transport, assign mode)."""
+and the MIDI path (pads -> sounds and transport, knobs -> pad or master, assign mode)."""
 
 from __future__ import annotations
 
@@ -13,16 +13,46 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from ..desktop.midi import MidiHub
 from ..desktop.service import LPD8_CLIENT, STATUS_PATH
-from . import files
-from .engine import MAX_SWING, PARAMS, QUANTISE_STEPS, Engine
+from . import dsp, files, voice
+from .engine import (
+    KNOB_PAGES,
+    MASTER_CHOICES,
+    MASTER_KNOBS,
+    MAX_SWING,
+    PRESETS,
+    QUANTISE_STEPS,
+    STEPS_PER_BAR,
+    Engine,
+    master_defaults,
+)
+from .fx import DELAY_TIMES, REVERB_MODES
 from .kit import NUM_SOUNDS, kit_dirs, load_kit
 from .mapping import ACTIONS, LoopSettings, describe, key_of, value_of
 
 QUANTISE_LABELS = {0: "Off", 4: "1/4", 8: "1/8", 16: "1/16", 32: "1/32"}
+CHOICE_LABELS = {
+    "filter_type": {"lp": "Low-pass", "hp": "High-pass", "bp": "Band-pass"},
+    "drive_type": {"soft": "Soft", "hard": "Hard clip", "fuzz": "Fuzz", "crush": "Crush"},
+    "reverb_mode": dict(REVERB_MODES),
+    "delay_time": {i: name for i, (name, _beats) in enumerate(DELAY_TIMES)},
+    "comp_speed": {"slow": "Slow (glue)", "fast": "Fast (punch)"},
+}
+
+
+def _hz(hz: float) -> str:
+    return f"{hz / 1000:.1f} kHz" if hz >= 1000 else f"{hz:.0f} Hz"
+
+
+def _secs(s: float) -> str:
+    return f"{s * 1000:.0f} ms" if s < 1 else f"{s:.1f} s"
+
+
+def _pct(v: float) -> str:
+    return f"{v * 100:.0f}%"
 
 
 class LoopController(QObject):
-    changed = Signal()  # settings, kit, devices, assignments, saved loops
+    changed = Signal()  # settings, kit, devices, assignments, saved loops, grid
     tick = Signal()  # 30 times a second: playhead, state
     padHit = Signal(int, float)  # sound, velocity: for the pad flash
     notify = Signal(str)
@@ -33,10 +63,12 @@ class LoopController(QObject):
         self.s = LoopSettings.load()
         self._kits = kit_dirs()
         self._kit_name = ""
-        self._assigning = ""  # "sound:N" or "action:name" while waiting for a control
+        self._assigning = ""  # "sound:N", "action:name" or "param:p.x" while waiting for a control
         self._taps: list[float] = []
         self._latency_text = "starting audio…"
         self._last_rev = -1
+        self._page = 0
+        self._follow = True  # the grid page follows the playhead
         self._apply_settings()
         self.hub = MidiHub("Chimp Loop", realtime=self._on_midi_now)
         self.hub.message.connect(self._on_midi_ui)
@@ -49,7 +81,6 @@ class LoopController(QObject):
         self._status_timer = QTimer(self, interval=400, timeout=self._poll_status)
         # Knob sweeps change parameters many times a second: save once they settle.
         self._save_later = QTimer(self, singleShot=True, interval=1500, timeout=self._save_settings)
-        self._save_rev = -1
 
     def start(self) -> None:
         self._poll_status()
@@ -61,13 +92,15 @@ class LoopController(QObject):
         self._timer.stop()
         self.hub.stop()
         self._save_settings()
+        self.e.close()
 
     def _apply_settings(self) -> None:
         s = self.s
         e = self.e
-        e.bpm, e.bars, e.metronome, e.volume = float(s.bpm), int(s.bars), bool(s.metronome), float(s.volume)
+        e.bpm, e.bars, e.metronome = float(s.bpm), int(s.bars), bool(s.metronome)
         e.quantise = s.quantise if s.quantise in QUANTISE_STEPS else 16
         e.fixed_velocity = bool(s.fixed_velocity)
+        e.knob_page = s.knob_page if s.knob_page in KNOB_PAGES else "pad"
         if s.sound:
             e.apply_sound_settings(s.sound)
         names = [d.name for d in self._kits]
@@ -86,14 +119,14 @@ class LoopController(QObject):
         with self.e.lock:
             self.s.bpm, self.s.bars, self.s.quantise = self.e.bpm, self.e.bars, self.e.quantise
             self.s.metronome, self.s.volume = self.e.metronome, self.e.volume
-            self.s.fixed_velocity = self.e.fixed_velocity
+            self.s.fixed_velocity, self.s.knob_page = self.e.fixed_velocity, self.e.knob_page
             self.s.sound = self.e.sound_settings()
         try:
             self.s.save()
         except OSError as exc:
             self.notify.emit(f"Couldn't save settings: {exc}")
 
-    # --- MIDI ------------------------------------------------------------------------
+    # --- the desktop service's LPD8 program ---------------------------------------------
 
     def _poll_status(self) -> None:
         try:
@@ -125,15 +158,26 @@ class LoopController(QObject):
     def _ignored(self, device: str) -> bool:
         return bool(self._lpd8_desktop) and device == LPD8_CLIENT
 
+    # --- MIDI ------------------------------------------------------------------------
+
+    def _param_of(self, target: str | None) -> str | None:
+        if not target:
+            return None
+        if target.startswith("knob:"):
+            return self.e.knob_target(int(target[5:]))
+        if target.startswith("param:"):
+            return target[6:]
+        return None
+
     def _on_midi_now(self, device: str, msg: list[int]) -> None:
         """rtmidi's thread: sounds and knobs act at once. Everything else waits for the UI."""
         if self._assigning or self._ignored(device):
             return
         v = value_of(msg)
         if v is not None:
-            target = self.s.target(device, v[0])
-            if target and target.startswith("param:"):
-                self.e.set_param(target[6:], v[1])
+            pid = self._param_of(self.s.target(device, v[0]))
+            if pid:
+                self.e.set_param(pid, v[1])
                 return
         k = key_of(msg)
         if k is None:
@@ -158,7 +202,7 @@ class LoopController(QObject):
             self._learn(device, key)
             return
         target = self.s.target(device, key)
-        if not target or target.startswith("param:"):
+        if not target or self._param_of(target):
             return
         if target.startswith("sound:"):
             self.padHit.emit(int(target[6:]), vel)
@@ -172,32 +216,39 @@ class LoopController(QObject):
         if what.startswith("action:"):
             label = ACTIONS.get(what[7:], what)
         elif what.startswith("param:"):
-            label = {p: lab for p, lab, _ in PARAMS}.get(what[6:], what)
+            label = self._label(what[6:])
         else:
             label = self.padLabels[int(what[6:])]
         self.notify.emit(f"{label} ← {device} · {describe(key)}")
         self._save_settings()
         self.changed.emit()
 
-    # --- properties ------------------------------------------------------------------
+    def _label(self, pid: str) -> str:
+        scope, key = pid.split(".", 1)
+        if scope == "m":
+            return "Master " + MASTER_KNOBS[key][0].lower()
+        return f"Pad {voice.PAD_KNOBS[key][0].lower()}"
+
+    # --- ticking ------------------------------------------------------------------------
 
     def _on_tick(self) -> None:
+        e = self.e
+        if self._follow and e.state in ("playing", "overdub") and e.length:
+            page = int(e.step_of(e.playhead) // STEPS_PER_BAR)
+            if page != self._page and page < self.gridPages:
+                self._page = page
+                self.changed.emit()
         self.tick.emit()
-        if self.e.revision != self._last_rev:
-            self._last_rev = self.e.revision
+        if e.revision != self._last_rev:
+            self._last_rev = e.revision
             self.changed.emit()
             self._save_later.start()  # knob moves from the controller land here too
+
+    # --- transport and loop properties ---------------------------------------------------
 
     @Property(str, notify=tick)
     def state(self) -> str:
         return self.e.state
-
-    @Property(float, notify=tick)
-    def position(self) -> float:
-        e = self.e
-        if e.state == "recording":
-            return (e.playhead / (e.bars * e.bar_frames())) if e.bars else -1.0
-        return e.playhead / e.length if e.length and e.state != "stopped" else 0.0
 
     @Property(str, notify=tick)
     def timeText(self) -> str:
@@ -207,14 +258,23 @@ class LoopController(QObject):
             return f"{max(0, e.playhead) / r:4.1f} s"
         if not e.length:
             return ""
-        beats = e.length / e.beat_frames()
-        return f"{e.length / r:.2f} s · {beats:.0f} beats"
+        return f"{e.length / r:.2f} s · {e.steps() // STEPS_PER_BAR or 1} bar{'s' if e.steps() > 16 else ''}"
 
-    @Property(int, notify=changed)
-    def beats(self) -> int:
-        """Beats in the loop (for the timeline's grid); 0 before there is one."""
+    @Property(int, notify=tick)
+    def stepNow(self) -> int:
+        """The playing step within the shown page, or -1."""
         e = self.e
-        return max(1, round(e.length / e.beat_frames())) if e.length else 0
+        if e.state not in ("playing", "overdub") or not e.length:
+            return -1
+        k = int(e.playhead / e.step_frames()) % e.steps() - self._page * STEPS_PER_BAR
+        return k if 0 <= k < STEPS_PER_BAR else -1
+
+    @Property(float, notify=tick)
+    def recordProgress(self) -> float:
+        e = self.e
+        if e.state == "recording" and e.bars:
+            return max(0.0, e.playhead / (e.bars * e.bar_frames()))
+        return -1.0
 
     @Property(float, notify=changed)
     def bpm(self) -> float:
@@ -236,9 +296,9 @@ class LoopController(QObject):
     def metronome(self) -> bool:
         return self.e.metronome
 
-    @Property(float, notify=changed)
-    def volume(self) -> float:
-        return self.e.volume
+    @Property(bool, notify=changed)
+    def fixedVelocity(self) -> bool:
+        return self.e.fixed_velocity
 
     @Property(int, notify=changed)
     def layerCount(self) -> int:
@@ -257,67 +317,9 @@ class LoopController(QObject):
     def padLabels(self) -> list[str]:
         return self.e.kit.labels() if self.e.kit else [""] * NUM_SOUNDS
 
-    @Property("QVariantList", notify=changed)
-    def hitMarks(self) -> list:
-        """[{pos 0-1, sound, layer, vel}] for the timeline, quantised as they'll play."""
-        e = self.e
-        with e.lock:
-            if not e.length:
-                return []
-            return [
-                {"pos": e.placed(h.t) / e.length, "sound": h.sound, "layer": i, "vel": h.vel}
-                for i, layer in enumerate(e.layers)
-                for h in layer
-            ]
-
     @Property(int, notify=changed)
     def selectedSound(self) -> int:
         return self.e.selected
-
-    @Property(bool, notify=changed)
-    def fixedVelocity(self) -> bool:
-        return self.e.fixed_velocity
-
-    @Property("QVariantList", notify=changed)
-    def params(self) -> list:
-        """[{id, label, value 0-1, text, assigned}] for the effect dials."""
-        e = self.e
-        got = self.s.params_assigned()
-        sel = self.padLabels[e.selected] or f"Sound {e.selected + 1}"
-        out = []
-        for pid, label, _default in PARAMS:
-            v = e.get_param(pid)
-            if pid in ("pitch", "decay"):
-                label = f"{label} · {sel}"
-            out.append(
-                {
-                    "id": pid,
-                    "label": label,
-                    "value": v,
-                    "text": self._param_text(pid, v),
-                    "assigned": ", ".join(got.get(pid, [])),
-                }
-            )
-        return out
-
-    def _param_text(self, pid: str, v: float) -> str:
-        e = self.e
-        if pid == "filter":
-            if abs(v - 0.5) <= e.fx.filter.DEAD:
-                return "Off"
-            t = (abs(v - 0.5) - e.fx.filter.DEAD) / (0.5 - e.fx.filter.DEAD)
-            hz = 20000.0 * (150.0 / 20000.0) ** t if v < 0.5 else 20.0 * (6000.0 / 20.0) ** t
-            return ("LP " if v < 0.5 else "HP ") + (f"{hz / 1000:.1f} kHz" if hz >= 1000 else f"{hz:.0f} Hz")
-        if pid in ("delay", "reverb"):
-            return "Off" if v <= 0 else f"{v * 100:.0f}%"
-        if pid == "swing":
-            return "Off" if v <= 0 else f"{50 * (1 + v * MAX_SWING):.0f}%"
-        if pid == "pitch":
-            p = e.pitch[e.selected]
-            return "0" if p == 0 else f"{p:+g} st"
-        if pid == "decay":
-            return "Full" if v >= 1 else f"{v * 100:.0f}%"
-        return f"{v * 100:.0f}%"
 
     @Property("QStringList", notify=changed)
     def devices(self) -> list[str]:
@@ -331,14 +333,227 @@ class LoopController(QObject):
         self._latency_text = f"{device} · {frames / self.e.rate * 1000:.0f} ms"
         self.changed.emit()
 
+    # --- step grid -----------------------------------------------------------------------
+
+    @Property("QVariantList", notify=changed)
+    def gridCells(self) -> list:
+        return self.e.grid(self._page)
+
+    @Property(int, notify=changed)
+    def gridPage(self) -> int:
+        return self._page
+
+    @Property(int, notify=changed)
+    def gridPages(self) -> int:
+        return max(1, -(-self.e.steps() // STEPS_PER_BAR))
+
+    @Property(bool, notify=changed)
+    def followPlayhead(self) -> bool:
+        return self._follow
+
+    @Slot(int)
+    def setGridPage(self, page: int) -> None:
+        self._page = max(0, min(page, self.gridPages - 1))
+        self._follow = False
+        self.changed.emit()
+
+    @Slot(bool)
+    def setFollow(self, on: bool) -> None:
+        self._follow = on
+        self.changed.emit()
+
+    @Slot(int, int)
+    def toggleStep(self, sound: int, step: int) -> None:
+        self.e.toggle_step(sound, self._page * STEPS_PER_BAR + step)
+        self.e.select(sound)
+
+    @Slot(int, int)
+    def cycleStepVelocity(self, sound: int, step: int) -> None:
+        """Soft (0.4) -> normal (0.8) -> accent (1.0) -> soft; an empty step gets an accent."""
+        s = self._page * STEPS_PER_BAR + step
+        v = self.e.grid(self._page)[sound][step]
+        if v <= 0:
+            self.e.toggle_step(sound, s, 1.0)
+        else:
+            self.e.set_step_velocity(sound, s, 0.8 if v < 0.6 else 1.0 if v < 0.9 else 0.4)
+
+    # --- sound: pad and master parameters -------------------------------------------------
+
+    def _pad_text(self, key: str, v: float, pad: dict) -> str:
+        if key in ("level", "drive", "punch", "delay", "reverb"):
+            return "Off" if key in ("drive", "punch") and v <= 0 else _pct(v)
+        if key == "pan":
+            return "C" if abs(v - 0.5) < 0.02 else f"L{(0.5 - v) * 200:.0f}" if v < 0.5 else f"R{(v - 0.5) * 200:.0f}"
+        if key == "pitch":
+            st = voice.semitones(pad)
+            return "0" if st == 0 else f"{st:+g} st"
+        if key == "attack":
+            return "0" if v <= 0 else _secs(0.5 * v * v)
+        if key == "sustain":
+            return "Full" if v >= 1 else _secs(1.5 * v * v)
+        if key == "decay":
+            return "Full" if v >= 1 else _secs((0.008 + 0.8 * v * v) * 6.9)  # to -60 dB
+        if key == "cutoff":
+            return "Open" if not voice.filter_on(pad) else _hz(dsp.cutoff_hz(v))
+        if key == "resonance":
+            return f"Q {dsp.resonance_q(v):.1f}"
+        return _pct(v)
+
+    def _master_text(self, key: str, v: float) -> str:
+        s = self.e.master_settings
+        if key == "filter":
+            setting = dsp.dj_setting(v, s["resonance"])
+            return "Off" if setting is None else ("LP " if setting[0] == "lp" else "HP ") + _hz(setting[1])
+        if key in ("delay", "reverb", "shimmer", "drive", "comp"):
+            return "Off" if v <= 0 else _pct(v)
+        if key == "size":
+            return _secs(self.e.master.reverb.rt60())
+        if key == "tone":
+            return _hz(1200.0 * (14000.0 / 1200.0) ** v)
+        if key == "limit":
+            return "Safety" if v <= 0 else f"+{v * 18:.0f} dB"
+        if key == "swing":
+            return "Off" if v <= 0 else f"{50 * (1 + v * MAX_SWING):.0f}%"
+        return _pct(v)
+
+    @Property("QVariantList", notify=changed)
+    def padParams(self) -> list:
+        pad = self.e.pads[self.e.selected]
+        got = self.s.params_assigned()
+        page = KNOB_PAGES[self.e.knob_page]
+        out = []
+        for key, (label, default) in voice.PAD_KNOBS.items():
+            pid = f"p.{key}"
+            knob = page.index(pid) + 1 if pid in page else 0
+            out.append({
+                "id": pid, "label": label, "value": pad[key], "default": default,
+                "text": self._pad_text(key, pad[key], pad), "assigned": ", ".join(got.get(pid, [])), "knob": knob,
+            })  # fmt: skip
+        return out
+
+    @Property("QVariantList", notify=changed)
+    def masterParams(self) -> list:
+        s = self.e.master_settings
+        got = self.s.params_assigned()
+        page = KNOB_PAGES[self.e.knob_page]
+        out = []
+        for key, (label, default) in MASTER_KNOBS.items():
+            pid = f"m.{key}"
+            knob = page.index(pid) + 1 if pid in page else 0
+            out.append({
+                "id": pid, "label": label, "value": s[key], "default": default,
+                "text": self._master_text(key, s[key]), "assigned": ", ".join(got.get(pid, [])), "knob": knob,
+            })  # fmt: skip
+        return out
+
+    def _choices(self, scope: str, spec: dict, values: dict) -> list:
+        out = []
+        for key, (label, _default, options) in spec.items():
+            if options == (False, True):
+                continue  # switches, not lists
+            names = CHOICE_LABELS.get(key, {})
+            out.append({
+                "id": f"{scope}.{key}", "label": label, "options": [str(names.get(o, o)) for o in options],
+                "index": list(options).index(values[key]) if values[key] in options else 0,
+            })  # fmt: skip
+        return out
+
+    @Property("QVariantList", notify=changed)
+    def padChoices(self) -> list:
+        return self._choices("p", voice.PAD_CHOICES, self.e.pads[self.e.selected])
+
+    @Property("QVariantList", notify=changed)
+    def masterChoices(self) -> list:
+        return self._choices("m", MASTER_CHOICES, self.e.master_settings)
+
+    @Property(bool, notify=changed)
+    def padReverse(self) -> bool:
+        return bool(self.e.pads[self.e.selected]["reverse"])
+
+    @Property(bool, notify=changed)
+    def pingPong(self) -> bool:
+        return bool(self.e.master_settings["pingpong"])
+
+    @Property("QStringList", constant=True)
+    def presets(self) -> list[str]:
+        return list(PRESETS)
+
+    @Property(str, notify=changed)
+    def knobPage(self) -> str:
+        return self.e.knob_page
+
+    @Property(float, notify=tick)
+    def compReduction(self) -> float:
+        return float(self.e.master.comp.reduction_db + self.e.master.limiter.reduction_db)
+
+    @Slot(str, float)
+    def setParam(self, pid: str, v: float) -> None:
+        self.e.set_param(pid, v)
+
+    @Slot(str)
+    def resetParam(self, pid: str) -> None:
+        scope, key = pid.split(".", 1)
+        default = voice.PAD_KNOBS[key][1] if scope == "p" else MASTER_KNOBS[key][1]
+        if pid == "p.cutoff":
+            default = voice.OPEN_CUTOFF[self.e.pads[self.e.selected]["filter_type"]]
+        self.e.set_param(pid, default)
+
+    @Slot(str, int)
+    def setChoice(self, pid: str, index: int) -> None:
+        scope, key = pid.split(".", 1)
+        spec = voice.PAD_CHOICES if scope == "p" else MASTER_CHOICES
+        options = spec[key][2]
+        self.e.set_param(pid, options[max(0, min(index, len(options) - 1))])
+
+    @Slot(str, bool)
+    def setSwitch(self, pid: str, on: bool) -> None:
+        self.e.set_param(pid, bool(on))
+
+    @Slot(str)
+    def applyPreset(self, name: str) -> None:
+        self.e.apply_preset(name)
+        self.notify.emit(f"Master: {name}")
+
+    @Slot()
+    def resetPad(self) -> None:
+        i = self.e.selected
+        for key, value in voice.default_pad().items():
+            self.e.set_pad(i, key, value)
+
+    @Slot()
+    def resetMaster(self) -> None:
+        keep = {k: self.e.master_settings[k] for k in ("swing", "volume")}
+        for key, value in {**master_defaults(), **keep}.items():
+            self.e.set_master(key, value)
+
+    @Slot(str)
+    def setKnobPage(self, page: str) -> None:
+        if page in KNOB_PAGES:
+            self.e.knob_page = page
+            self.e._changed()
+            self._save_settings()
+
+    # --- controller assignments, loops -----------------------------------------------------
+
     @Property(str, notify=changed)
     def assigning(self) -> str:
         return self._assigning
 
+    @Property(str, notify=changed)
+    def assigningLabel(self) -> str:
+        a = self._assigning
+        if a.startswith("sound:"):
+            return self.padLabels[int(a[6:])]
+        if a.startswith("action:"):
+            return ACTIONS.get(a[7:], a)
+        if a.startswith("param:"):
+            return self._label(a[6:])
+        return ""
+
     @Property("QVariantList", notify=changed)
     def actionList(self) -> list:
         got = self.s.actions_assigned()
-        return [{"id": a, "label": label, "assigned": ", ".join(got[a])} for a, label in ACTIONS.items()]
+        return [{"id": a, "label": label, "assigned": ", ".join(got.get(a, []))} for a, label in ACTIONS.items()]
 
     @Property("QStringList", notify=changed)
     def savedLoops(self) -> list[str]:
@@ -348,7 +563,7 @@ class LoopController(QObject):
     def exportDir(self) -> str:
         return str(files.EXPORT_DIR)
 
-    # --- slots -----------------------------------------------------------------------
+    # --- slots -----------------------------------------------------------------------------
 
     @Slot(int)
     def hitPad(self, sound: int) -> None:
@@ -356,24 +571,10 @@ class LoopController(QObject):
             return
         self.e.trigger(sound, 1.0)
         self.padHit.emit(sound, 1.0)
-        self.changed.emit()  # selected sound: pitch/decay dials follow it
 
-    @Slot(str, float)
-    def setParam(self, pid: str, v: float) -> None:
-        self.e.set_param(pid, v)
-        self._save_later.start()
-
-    @Slot(str)
-    def resetParam(self, pid: str) -> None:
-        self.e.set_param(pid, {p: d for p, _l, d in PARAMS}[pid])
-        self._save_later.start()
-        self.changed.emit()
-
-    @Slot(bool)
-    def setFixedVelocity(self, on: bool) -> None:
-        self.e.fixed_velocity = on
-        self._save_settings()
-        self.changed.emit()
+    @Slot(int)
+    def selectPad(self, sound: int) -> None:
+        self.e.select(sound)
 
     @Slot(str)
     def runAction(self, action: str) -> None:
@@ -382,10 +583,13 @@ class LoopController(QObject):
             e.record()
         elif action == "play":
             e.play_stop()
+            if e.state == "playing":
+                self._follow = True
         elif action == "undo":
             e.undo()
         elif action == "clear":
             e.clear()
+            self._page = 0
         elif action == "quantise":
             i = QUANTISE_STEPS.index(e.quantise) if e.quantise in QUANTISE_STEPS else 0
             self.setQuantise(QUANTISE_STEPS[(i + 1) % len(QUANTISE_STEPS)])
@@ -395,6 +599,9 @@ class LoopController(QObject):
         elif action == "kit":
             self.setKit(self.kitIndex + 1)
             self.notify.emit(f"Kit: {self._kit_name}")
+        elif action == "page":
+            self.setKnobPage("master" if e.knob_page == "pad" else "pad")
+            self.notify.emit(f"Knobs: {e.knob_page}")
         self.changed.emit()
 
     @Slot(float)
@@ -403,7 +610,7 @@ class LoopController(QObject):
             if self.e.state == "empty":
                 self.e.bpm = max(40.0, min(300.0, bpm))
             else:
-                # A recorded free loop keeps its length; its tempo is what it is.
+                # A recorded loop keeps its length; its tempo is what it is.
                 self.notify.emit("The tempo of a recorded loop comes from its length: clear it to change")
         self._save_settings()
         self.changed.emit()
@@ -436,9 +643,9 @@ class LoopController(QObject):
         self._save_settings()
         self.changed.emit()
 
-    @Slot(float)
-    def setVolume(self, v: float) -> None:
-        self.e.volume = max(0.0, min(1.0, v))
+    @Slot(bool)
+    def setFixedVelocity(self, on: bool) -> None:
+        self.e.fixed_velocity = on
         self._save_settings()
         self.changed.emit()
 
@@ -450,7 +657,7 @@ class LoopController(QObject):
 
     @Slot(str)
     def assign(self, target: str) -> None:
-        """target 'sound:N' or 'action:name': the next control pressed gets it. '' cancels."""
+        """target 'sound:N', 'action:name' or 'param:p.x': the next control used gets it. '' cancels."""
         self._assigning = target
         self.changed.emit()
 
@@ -481,6 +688,7 @@ class LoopController(QObject):
         if d.get("kit") in names:
             self._load_kit(names.index(d["kit"]))
         files.from_dict(self.e, d)
+        self._page = 0
         self.notify.emit(f"Loaded {name} — press Play")
         self.changed.emit()
 

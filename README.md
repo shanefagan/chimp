@@ -83,49 +83,80 @@ Profiles are separate sets of actions for the same controls ("Desktop", "Streami
 Switch them from the tray icon's menu or give a button **Next/Previous profile**.
 **Use for desktop control** turns a whole device off (e.g. while playing the MicroFreak).
 
-## Chimp Loop: drums and loops without a DAW
+## Chimp Loop: a drum machine for any controller
 
-`chimp-loop` (or "Chimp Loop" in the launcher and the tray menu) plays a 16-sound drum kit
-from every controller and records what you play into a loop.
+`chimp-loop` (or "Chimp Loop" in the launcher and the tray menu) is a Volca Beats-style drum
+machine: 16 parts, live looping and step entry on the same pattern, a sound per pad and a
+master bus over everything.
 
+**Pattern**
 - **Record** (Space): play; press again to close the loop. Its length is your take, and the
   tempo is worked out from it (or pick 1–8 bars and it closes on its own, with a metronome).
-- **Record** again: overdub a layer. **Undo** (Backspace) removes the last layer,
+  **Record** again overdubs a layer; **Undo** (Backspace) removes the last layer or step,
   **Clear** (Delete) starts over, **Play/Stop** (Enter).
-- **Quantise** (off, 1/4 to 1/32) is applied on playback, so you can change it or turn it off
-  after recording.
-- **Pads:** notes 36–51 play sounds 1–16, so an LPD8 program on notes 36–43 plays Kick, Snare,
-  Clap, Hi-hat, Open hat, Rim, Tom, Crash, and a KO II group plays the first 12.
-  **Assign pads** maps any pad to any sound.
-- **Controller buttons:** each looper control (record, play, undo, clear, quantise, metronome,
-  next kit) can be given to a button on a controller: a KO II key, a pad on a spare LPD8
-  program.
-- **Kits:** two are bundled (`drums1`, `drums2`). Add your own as a folder of WAVs in
-  `~/.local/share/chimp/kits/<name>/`. Files named `kick`, `snare_1`, `clap`, `hihat_1`,
-  `open_hihat`, `rim`, `tom_1`, `crash`, `snare_2`, `hihat_2`, `tom_2`, `tom_3`, `ride`,
-  `perc_1`, `perc_2` and `perc_3` go to those slots; others fill the gaps.
-- **Velocity:** pads play and record as hard as you hit them (dot size on the timeline);
-  **Fixed velocity** plays every hit at full strength.
-- **Knobs and effects:** eight dials, on the LPD8's knobs 1–8 out of the box (CC 70–77),
-  or on any knob or fader you assign:
-  - **Filter:** centre off; left sweeps a low-pass down, right a high-pass up (DJ style)
-  - **Delay** and **Echoes:** tempo-synced dotted-eighth echoes (mix, feedback)
-  - **Reverb**
-  - **Swing:** every second 1/8 or 1/16 late, up to 75%, on quantised playback and in the
-    MIDI export
-  - **Pitch** and **Decay** of the last pad you hit (tune the kick, shorten the open hat)
-  - **Volume**
+- **Steps:** a 16-part × 16-step grid, a bar per page, with the playhead. Click a step on or
+  off; right-click (or Shift-click) cycles soft / normal / accent. On an empty pattern the
+  first step makes a loop of the chosen length (1 bar if Free). Recorded hits show on it too.
+- **Quantise** (off, 1/4 to 1/32) is applied on playback, so it can change after recording.
+  **Swing** pushes every second 1/8 or 1/16 late (up to 75%).
+- **Velocity:** pads play and record as hard as you hit them; **Fixed velocity** plays every
+  hit at full strength.
 
-  Double-click a dial to reset it. Effects, swing and per-sound pitch/decay are saved with
-  each loop and go into WAV exports.
-- **Save** loops (`~/.local/share/chimp/loops/`), and **export** to `~/Music/Chimp/`:
-  - WAV, N repeats, looping seamlessly
-  - MIDI: General MIDI drum notes on channel 10, at the loop's tempo
+**Each pad's sound** (click a part name or hit the pad to select it)
+- Level, pan, pitch (±24 semitones)
+- Attack, sustain and decay
+- Filter: low-, high- or band-pass with cutoff and resonance
+- Drive: soft, hard clip, fuzz or crush (bits and sample rate)
+- Punch (compression on the hit), reverse
+- Delay and reverb sends: how much of this pad goes to the master delay and reverb
 
-Pads trigger from rtmidi's own thread, not a polling timer. The looper asks PipeWire for a
-256-frame period (`PIPEWIRE_LATENCY=256/48000`, this process only), so a pad sounds about
-11 ms after you hit it (the default 1024-frame graph would make that ~40 ms). Hits are
-recorded where you heard them, with that latency taken off.
+The shaping is rendered into the pad's sample in the background when a setting changes, so
+playing costs nothing extra; level, pan and sends act at once.
+
+**Master** (over everything, in this order)
+- Delay: 1/16 to 1/2 (dotted, triplet), echoes, ping-pong
+- Reverb: an 8-line feedback network, up to 30 s, with tone and modulation. Its modes:
+  - **Hall**
+  - **Rise:** the tail fed back an octave up
+  - **Sink:** the tail fed back an octave down
+  - **Reverse:** the tail in reversed grains that swell into each hit
+- Drive (soft / hard / fuzz / crush)
+- Filter: one knob, DJ style (centre off, left low-pass, right high-pass), with resonance
+- Compressor (slow glue or fast punch), with the gain reduction shown
+- Limiter: brick-wall at −0.3 dB, and "Limit" pushes up to +18 dB into it
+- Volume
+
+Presets for the master: **Clean**, **Abyss** (big, dark, octave-down shimmer, dotted
+ping-pong, fuzz, glued and limited), **Bloom**, **Reverse swell**, **Crushed**.
+
+**Knobs:** the LPD8's knobs 1–8 (CC 70–77) are on a page: **Pad** (level, pitch, attack,
+decay, cutoff, resonance, drive, reverb send of the selected pad) or **Master** (filter,
+resonance, drive, delay, echoes, reverb, size, compress). The numbered dials show which. K
+switches page, or a controller button assigned to it. Any dial can be given its own knob or
+fader instead (the small controller icon under it). Double-click a dial to reset it.
+
+**Pads and buttons:** notes 36–51 play sounds 1–16, so an LPD8 program on notes 36–43 plays
+Kick, Snare, Clap, Hi-hat, Open hat, Rim, Tom, Crash, and a KO II group the first 12. **Assign
+pads** maps any pad to any sound; **Controller buttons…** gives record, play, undo, clear,
+quantise, metronome, next kit and knob page to buttons on a controller. Keys: Z X C V, A S D F,
+Q W E R, 1 2 3 4 play the sounds as laid out on screen.
+
+**Kits:** two are bundled (`drums1`, `drums2`). Add your own as a folder of WAVs in
+`~/.local/share/chimp/kits/<name>/`. Files named `kick`, `snare_1`, `clap`, `hihat_1`,
+`open_hihat`, `rim`, `tom_1`, `crash`, `snare_2`, `hihat_2`, `tom_2`, `tom_3`, `ride`,
+`perc_1`, `perc_2` and `perc_3` go to those slots; others fill the gaps.
+
+**Save** loops (`~/.local/share/chimp/loops/`, with every pad and master setting), and
+**export** to `~/Music/Chimp/`:
+- WAV, N repeats, with all of the sound, looping seamlessly
+- MIDI: General MIDI drum notes on channel 10, at the loop's tempo, swing included
+
+**Under the hood:** numpy, a block at a time; no per-sample Python. The engine with 16
+shaped pads ringing and the Abyss master uses under 10% of each 5.3 ms block. Pads trigger
+from rtmidi's own thread, not a polling timer. The looper asks PipeWire for a 256-frame period
+(`PIPEWIRE_LATENCY=256/48000`, this process only), so a pad sounds about 11 ms after you hit
+it (the default 1024-frame graph would make that ~40 ms). Hits are recorded where you heard
+them, with that latency taken off.
 
 While Chimp Loop is open, the desktop service leaves the other controllers to it: no
 desktop actions from the KO II's profile while you drum. The LPD8 stays with the desktop

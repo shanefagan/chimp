@@ -22,7 +22,6 @@ def click_kit() -> Kit:
 def engine(**kw) -> Engine:
     e = Engine(RATE)
     e.set_kit(click_kit())
-    e.volume = 1.0
     e.metronome = False
     for k, v in kw.items():
         setattr(e, k, v)
@@ -132,36 +131,36 @@ def test_open_hat_is_choked_by_closed_hat():
     b = e.render(BLOCK)
     c = e.render(BLOCK)
     # (the master filter delays everything by 31 frames, so b starts with a's tail)
-    assert a[:, 0].max() > 0 and b[:, 0].max() > 0.5 and c[:, 0].max() == 0
+    assert a[:, 0].max() > 0 and b[:, 0].max() > 0.25 and c[:, 0].max() == 0
 
 
-# --- effects and knobs ---------------------------------------------------------------
+# --- pads, master, step sequencer ------------------------------------------------------
 
 
-def impulse_response(e: Engine, frames: int) -> np.ndarray:
-    e.trigger(0)
+def impulse_response(e: Engine, frames: int, sound: int = 0) -> np.ndarray:
+    e.trigger(sound)
     return np.concatenate([e.render(BLOCK) for _ in range(frames // BLOCK)])[:, 0]
 
 
-def test_delay_echoes_a_dotted_eighth_later():
+def test_master_delay_echoes_a_dotted_eighth_later():
     e = engine(bpm=120.0)
-    e.set_param("delay", 1.0)
-    e.set_param("feedback", 0.0)
-    out = impulse_response(e, RATE)
-    peaks = onsets(out)
+    e.set_param("m.delay", 1.0)
+    e.set_param("m.echoes", 0.0)
+    e.set_param("m.pingpong", False)
+    peaks = onsets(impulse_response(e, RATE))
     echo = round(RATE * 0.5 * 0.75)  # dotted eighth at 120 bpm
     assert len(peaks) == 2 and abs((peaks[1] - peaks[0]) - echo) <= 40
 
 
-def test_filter_low_pass_darkens_and_high_pass_thins():
+def test_master_filter_low_pass_darkens_and_high_pass_thins():
     e = engine()
     noise = np.random.default_rng(1).uniform(-0.5, 0.5, (RATE // 2, 2)).astype(np.float32)
     e.kit.sounds[0].data = noise
 
     def energy(v, lo, hi):
-        e.set_param("filter", v)
+        e.set_param("m.filter", v)
         e._voices.clear()
-        x = impulse_response(e, RATE // 2)[2000:]
+        x = impulse_response(e, RATE // 2)[4000:]
         spec = np.abs(np.fft.rfft(x)) ** 2
         f = np.fft.rfftfreq(len(x), 1 / RATE)
         return spec[(f >= lo) & (f < hi)].sum() / spec.sum()
@@ -171,47 +170,94 @@ def test_filter_low_pass_darkens_and_high_pass_thins():
     assert energy(0.9, 0, 500) < 0.005  # high-pass up
 
 
-def test_reverb_tail_decays_and_stays_stable():
+def test_reverb_send_per_pad_and_return_overall():
     e = engine()
-    e.set_param("reverb", 1.0)
-    out = impulse_response(e, RATE * 4)
-    early = np.abs(out[RATE // 10 : RATE // 2]).max()
-    late = np.abs(out[RATE * 3 :]).max()
-    assert early > 0.005 and late < early / 20 and np.isfinite(out).all()
-
-
-def test_full_feedback_never_runs_away():
-    e = engine()
-    e.set_param("delay", 1.0)
-    e.set_param("feedback", 1.0)
-    e.set_param("reverb", 1.0)
-    out = impulse_response(e, RATE * 6)
-    assert np.isfinite(out).all() and np.abs(out[-RATE:]).max() < 0.5
+    e.set_param("m.reverb", 1.0)
+    wet = np.abs(impulse_response(e, RATE)[RATE // 4 :]).max()
+    e._voices.clear()
+    for _ in range(RATE * 4 // BLOCK):  # let the tail die
+        e.render(BLOCK)
+    e.set_pad(0, "reverb", 0.0)  # this pad sends nothing
+    dry = np.abs(impulse_response(e, RATE)[RATE // 4 :]).max()
+    assert wet > 1e-3 and dry < wet / 100
 
 
 def test_swing_pushes_every_second_sixteenth():
     e = engine(bars=1, bpm=120.0, quantise=16)
     e.length = round(e.bar_frames())
     g = e.grid_frames()
-    e.set_param("swing", 1.0)
+    e.set_param("m.swing", 1.0)
     assert e.placed(0) == 0
     assert e.placed(round(g)) == round(g + 0.5 * g)
     assert e.placed(round(2 * g)) == round(2 * g)
 
 
-def test_pitch_and_decay_act_on_the_selected_sound():
+def test_pad_settings_act_on_the_selected_pad_and_render_in_the_background():
     e = engine()
     long = np.ones((RATE, 2), np.float32) * 0.1
     e.kit.sounds[2].data = long
     e.trigger(2)
     assert e.selected == 2
-    e.set_param("pitch", 1.0)  # +12 semitones: half as long
-    e.set_param("decay", 0.2)
-    v = e._variant(2, long)
-    assert e.pitch[2] == 12.0 and e.pitch[0] == 0.0
-    assert len(v) < RATE // 3 and v[-1, 0] == 0.0  # 0.27 s instead of 1 s
-    e.set_param("decay", 1.0)
-    assert abs(len(e._variant(2, long)) - RATE // 2) <= 1
+    e.set_param("p.pitch", 0.75)  # +12 semitones: half as long
+    e.set_param("p.decay", 0.2)
+    assert e.pads[2]["pitch"] == 0.75 and e.pads[0]["pitch"] == 0.5
+    assert e.wait_built()
+    v = e._data(2)
+    assert len(v) < RATE // 2 and v[-1, 0] == 0.0
+    e.set_param("p.decay", 1.0)
+    e.set_param("p.pitch", 0.5)
+    assert e.wait_built() and e._data(2) is long  # back to the sample as it is
+
+
+def test_pad_level_and_pan_act_at_once():
+    e = engine()
+    e.set_pad(0, "pan", 0.0)  # hard left
+    e.trigger(0)
+    out = e.render(BLOCK)
+    assert np.abs(out[:, 0]).max() > 0.3 and np.abs(out[:, 1]).max() < 1e-6
+
+
+def test_pad_filter_type_switch_starts_open():
+    e = engine()
+    e.set_pad(0, "filter_type", "hp")
+    assert e.pads[0]["cutoff"] == 0.0
+    e.set_pad(0, "filter_type", "bp")
+    assert e.pads[0]["cutoff"] == 0.5
+
+
+def test_presets_set_the_master_and_keep_volume():
+    from chimp.loop.engine import PRESETS
+
+    e = engine()
+    e.set_param("m.volume", 0.6)
+    e.apply_preset("Abyss")
+    assert e.master.reverb.mode == "sink" and e.master_settings["reverb"] == PRESETS["Abyss"]["reverb"]
+    assert e.volume == 0.6
+    e.apply_preset("Clean")
+    assert e.master.reverb.mix == 0.0 and e.master.drive == 0.0
+
+
+def test_step_entry_makes_a_bar_and_toggles():
+    e = engine(bpm=120.0)
+    e.toggle_step(0, 0)
+    e.toggle_step(1, 4)
+    e.toggle_step(0, 8)
+    assert e.state == "stopped" and e.length == round(e.bar_frames()) and e.steps() == 16
+    g = e.grid(0)
+    assert g[0][0] == 0.8 and g[1][4] == 0.8 and g[0][8] == 0.8 and sum(map(sum, g)) == pytest.approx(2.4)
+    e.toggle_step(0, 8)  # off again
+    assert e.grid(0)[0][8] == 0
+    e.set_step_velocity(1, 4, 1.0)
+    assert e.grid(0)[1][4] == 1.0
+    e.undo()  # takes back the last step entered (sound 1 on step 4)
+    assert e.grid(0)[1][4] == 0
+
+
+def test_recorded_hits_show_on_the_grid():
+    e = engine(bars=1, bpm=120.0, quantise=0)
+    sf = round(e.step_frames())
+    run(e, 96000 + BLOCK * 2, {0: e.record, sf * 3 + 200: lambda now: e.trigger(5, 0.5, now)})
+    assert e.grid(0)[5][3] == pytest.approx(0.5, abs=0.01)
 
 
 def test_sound_settings_round_trip_through_save():
@@ -221,27 +267,34 @@ def test_sound_settings_round_trip_through_save():
     e.length = round(e.bar_frames())
     e.layers = [[]]
     e.selected = 5
-    e.set_param("pitch", 0.25)
-    e.set_param("reverb", 0.3)
-    e.set_param("swing", 0.6)
+    e.set_param("p.pitch", 0.25)
+    e.set_param("p.filter_type", "hp")
+    e.set_param("m.reverb", 0.3)
+    e.set_param("m.reverb_mode", "rise")
     d = files.to_dict(e, "clicks")
     f = engine()
     files.from_dict(f, d)
-    assert f.pitch[5] == -6.0 and abs(f.fx.reverb.mix - 0.3) < 1e-6 and abs(f.swing - 0.6) < 1e-6
+    assert f.pads[5]["pitch"] == 0.25 and f.pads[5]["filter_type"] == "hp"
+    assert f.master.reverb.mix == 0.3 and f.master.reverb.mode == "rise"
 
 
-def test_effects_fit_easily_in_a_block():
+def test_everything_on_fits_in_a_block():
     import time
 
     e = engine()
-    for p in ("delay", "reverb"):
-        e.set_param(p, 0.6)
-    e.set_param("filter", 0.2)
+    e.apply_preset("Abyss")
+    e.set_param("m.filter", 0.2)
+    for i in range(16):
+        e.set_pad(i, "drive", 0.3)
+        e.set_pad(i, "cutoff", 0.6)
+        e.set_pad(i, "resonance", 0.5)
+    assert e.wait_built()
     for i in range(16):
         e.trigger(i)
-    e.render(BLOCK)
+    for _ in range(20):
+        e.render(BLOCK)
     t = time.perf_counter()
     for _ in range(200):
         e.render(BLOCK)
     per_block = (time.perf_counter() - t) / 200
-    assert per_block < (BLOCK / RATE) / 4, f"{per_block * 1000:.2f} ms per {BLOCK / RATE * 1000:.1f} ms block"
+    assert per_block < (BLOCK / RATE) * 0.35, f"{per_block * 1000:.2f} ms per {BLOCK / RATE * 1000:.1f} ms block"

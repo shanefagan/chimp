@@ -8,21 +8,20 @@ def test_defaults_notes_play_sounds_and_lpd8_knobs_turn_params():
     assert s.target("LPD8 mk2", "note:1:36") == "sound:0"
     assert s.target("LPD8 mk2", "note:10:43") == "sound:7"
     assert s.target("EP-133", "note:1:52") == "sound:0"  # wraps after 16
-    assert s.target("LPD8 mk2", "cc:1:70") == "param:filter"
-    assert s.target("LPD8 mk2", "cc:3:77") == "param:volume"
+    assert s.target("LPD8 mk2", "cc:1:70") == "knob:0"
+    assert s.target("LPD8 mk2", "cc:3:77") == "knob:7"
     assert s.target("LPD8 mk2", "cc:1:69") is None
 
 
 def test_assigned_controls_win_and_move():
     s = LoopSettings()
-    s.set_assign("KO II", "cc:1:21", "param:reverb")
-    assert s.target("KO II", "cc:1:21") == "param:reverb"
-    s.set_assign("KO II", "cc:1:22", "param:reverb")  # moves, not a second one
-    assert s.target("KO II", "cc:1:21") is None and s.target("KO II", "cc:1:22") == "param:reverb"
+    s.set_assign("KO II", "cc:1:21", "param:m.reverb")
+    assert s.target("KO II", "cc:1:21") == "param:m.reverb"
+    s.set_assign("KO II", "cc:1:22", "param:m.reverb")  # moves, not a second one
+    assert s.target("KO II", "cc:1:21") is None and s.target("KO II", "cc:1:22") == "param:m.reverb"
     s.set_assign("LPD8 mk2", "cc:1:70", "action:record")  # a default knob CC reused as a button
     assert s.target("LPD8 mk2", "cc:1:70") == "record"
-    assert "CC 70" not in " ".join(s.params_assigned()["filter"])  # default no longer offered
-    assert s.params_assigned()["reverb"] == ["KO II · CC 22 · ch 1"]
+    assert s.params_assigned() == {"m.reverb": ["KO II · CC 22 · ch 1"]}
 
 
 def test_message_parsing():

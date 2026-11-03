@@ -1,11 +1,12 @@
 """What a MIDI message does in the looper: play a sound, a transport action, or turn
-a knob parameter (filter, delay, reverb, swing, pitch, decay, volume).
+a parameter of the selected pad or of the master bus.
 
 By default any note plays a sound: note 36 is sound 1 (Kick) up to note 51, then it
 wraps, so an LPD8 program on notes 36-43 plays the first 8 sounds and a KO II group the
-first 12; and CC 70-77 (the LPD8 mk2's knobs out of the box) turn the 8 parameters.
-"Assign" learns a control for a sound, an action or a parameter, per device; assigned
-controls take precedence over the defaults.
+first 12; and CC 70-77 (the LPD8 mk2's knobs out of the box) are eight knobs whose job
+depends on the knob page: the selected pad's sound, or the master. "Assign" learns a
+control for a sound, an action or one parameter, per device; assigned controls take
+precedence over the defaults.
 """
 
 from __future__ import annotations
@@ -14,12 +15,12 @@ import json
 from dataclasses import dataclass, field
 
 from ..desktop.config import CONFIG_DIR
-from .engine import PARAM_IDS
 from .kit import NUM_SOUNDS
 
 SETTINGS_PATH = CONFIG_DIR / "loop.json"
 DEFAULT_BASE_NOTE = 36
-DEFAULT_KNOB_CC = 70  # CC 70-77 -> PARAMS in order
+DEFAULT_KNOB_CC = 70  # CC 70-77: knobs 1-8 of the current knob page
+NUM_KNOBS = 8
 
 ACTIONS: dict[str, str] = {
     "record": "Record / overdub",
@@ -29,6 +30,7 @@ ACTIONS: dict[str, str] = {
     "quantise": "Quantise: next setting",
     "metronome": "Metronome on/off",
     "kit": "Next kit",
+    "page": "Knobs: pad / master",
 }
 
 
@@ -74,7 +76,8 @@ class LoopSettings:
     metronome: bool = True
     volume: float = 0.8
     fixed_velocity: bool = False
-    sound: dict = field(default_factory=dict)  # Engine.sound_settings(): fx, swing, pitch/decay
+    knob_page: str = "pad"
+    sound: dict = field(default_factory=dict)  # Engine.sound_settings(): pads and master
     # device -> {key: "sound:N" | action name}
     assign: dict[str, dict[str, str]] = field(default_factory=dict)
 
@@ -88,8 +91,8 @@ class LoopSettings:
             return f"sound:{(note - DEFAULT_BASE_NOTE) % NUM_SOUNDS}"
         if key.startswith("cc:"):
             k = int(key.rsplit(":", 1)[1]) - DEFAULT_KNOB_CC
-            if 0 <= k < len(PARAM_IDS) and not self._taken(key):
-                return f"param:{PARAM_IDS[k]}"
+            if 0 <= k < NUM_KNOBS and not self._taken(key):
+                return f"knob:{k}"
         return None
 
     def _taken(self, key: str) -> bool:
@@ -115,16 +118,13 @@ class LoopSettings:
         return out
 
     def params_assigned(self) -> dict[str, list[str]]:
-        """param -> ['Device · CC 21 · ch 1', ...]; the CC 70-77 defaults are listed too."""
-        out: dict[str, list[str]] = {p: [] for p in PARAM_IDS}
+        """'p.cutoff' / 'm.reverb' -> ['Device · CC 21 · ch 1', ...] (learned knobs only;
+        the CC 70-77 knobs follow the knob page)."""
+        out: dict[str, list[str]] = {}
         for device, keys in self.assign.items():
             for key, target in keys.items():
-                if target.startswith("param:") and target[6:] in out:
-                    out[target[6:]].append(f"{device} · {describe(key)}")
-        for i, p in enumerate(PARAM_IDS):
-            key = f"cc:1:{DEFAULT_KNOB_CC + i}"
-            if not out[p] and not self._taken(key):
-                out[p].append(f"CC {DEFAULT_KNOB_CC + i} (LPD8 knob {i + 1})")
+                if target.startswith("param:"):
+                    out.setdefault(target[6:], []).append(f"{device} · {describe(key)}")
         return out
 
     def clear_assign(self, target: str) -> None:
@@ -140,7 +140,18 @@ class LoopSettings:
         except (OSError, ValueError):
             return cls()
         s = cls()
-        for k in ("kit", "bpm", "bars", "quantise", "metronome", "volume", "assign", "fixed_velocity", "sound"):
+        for k in (
+            "kit",
+            "bpm",
+            "bars",
+            "quantise",
+            "metronome",
+            "volume",
+            "assign",
+            "fixed_velocity",
+            "sound",
+            "knob_page",
+        ):
             if k in raw:
                 setattr(s, k, raw[k])
         return s
