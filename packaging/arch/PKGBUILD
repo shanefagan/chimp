@@ -30,6 +30,7 @@ optdepends=(
   'python-pulsectl: in-process volume/mute control (smoother knobs, no polling for pad lights)'
   'obs-studio: OBS scene/record/stream/mute actions'
   'bpfrag: Game volume knob follows the game bpfrag detects in a match'
+  'python-evdev: gamepads (and a Wooting in gamepad mode) as Chimp Loop controllers'
 )
 conflicts=('lpd8mk2-editor' 'knobdeck')
 replaces=('lpd8mk2-editor' 'knobdeck')

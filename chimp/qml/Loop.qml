@@ -20,7 +20,18 @@ Kirigami.ApplicationWindow {
     function stateText(s) {
         return { empty: "Ready", recording: "Recording", playing: "Playing", overdub: "Overdubbing", stopped: "Stopped" }[s] || s
     }
-    readonly property bool typing: saveName.activeFocus || exportName.activeFocus
+    readonly property bool typing: saveName.activeFocus || exportName.activeFocus || soundName.activeFocus
+    property string view: "steps"  // "steps" or "pads"
+    readonly property var holdKeys: ({ "G": "roll", "5": "g.stutter4", "6": "g.stutter8", "7": "g.stutter16",
+                                       "8": "g.stutter32", "9": "g.tapestop", "0": "g.reverse", "-": "g.half" })
+    function how(mods) {
+        return (mods & Qt.ShiftModifier) ? "select" : (mods & Qt.ControlModifier) ? "mute"
+             : (mods & Qt.AltModifier) ? "solo" : ""
+    }
+    function keyName(event) {
+        if (event.key === Qt.Key_Minus) return "-"
+        return event.text ? event.text.toUpperCase() : ""
+    }
 
     Connections {
         target: loop
@@ -36,18 +47,8 @@ Kirigami.ApplicationWindow {
     Shortcut { sequences: ["Escape"]; enabled: loop.assigning !== ""; onActivated: loop.assign("") }
     Shortcut { sequences: ["T"]; autoRepeat: false; enabled: !root.typing; onActivated: loop.tapTempo() }
     Shortcut { sequences: ["K"]; autoRepeat: false; enabled: !root.typing; onActivated: loop.runAction("page") }
-    Repeater {
-        model: 16
-        delegate: Item {
-            required property int index
-            Shortcut {
-                sequences: [root.padKeys[index]]
-                autoRepeat: false
-                enabled: !root.typing
-                onActivated: loop.hitPad(index)
-            }
-        }
-    }
+    Shortcut { sequences: ["]"]; autoRepeat: false; enabled: !root.typing; onActivated: loop.runAction("sound_next") }
+    Shortcut { sequences: ["["]; autoRepeat: false; enabled: !root.typing; onActivated: loop.runAction("sound_prev") }
 
     // --- a parameter dial: label, dial, value, LPD8-knob badge, assign button ---------
     component ParamDial: ColumnLayout {
@@ -152,6 +153,31 @@ Kirigami.ApplicationWindow {
                 }
             }
         ]
+
+        // Pads (ZXCV ASDF QWER 1234; Shift selects, Ctrl mutes, Alt solos) and the held
+        // keys (G roll, 5-0 and - glitches) need key releases, so they're handled here.
+        Item {
+            id: keyCatcher
+            focus: true
+            Component.onCompleted: forceActiveFocus()
+            Keys.onPressed: (event) => {
+                if (event.isAutoRepeat) { event.accepted = true; return }
+                const k = root.keyName(event)
+                const pad = root.padKeys.indexOf(k)
+                if (pad >= 0 && !(event.modifiers & Qt.MetaModifier)) {
+                    loop.padDown(pad, root.how(event.modifiers)); event.accepted = true
+                } else if (root.holdKeys[k] !== undefined) {
+                    loop.holdDown(root.holdKeys[k]); event.accepted = true
+                }
+            }
+            Keys.onReleased: (event) => {
+                if (event.isAutoRepeat) { event.accepted = true; return }
+                const k = root.keyName(event)
+                const pad = root.padKeys.indexOf(k)
+                if (pad >= 0) { loop.padUp(pad); event.accepted = true }
+                else if (root.holdKeys[k] !== undefined) { loop.holdUp(root.holdKeys[k]); event.accepted = true }
+            }
+        }
 
         RowLayout {
             anchors.fill: parent
@@ -285,6 +311,64 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
+                // performance: view, roll, glitches (all held: press and hold)
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+                    QQC2.Button {
+                        focusPolicy: Qt.NoFocus
+                        text: "Steps"
+                        checkable: true
+                        checked: root.view === "steps"
+                        onClicked: root.view = "steps"
+                    }
+                    QQC2.Button {
+                        focusPolicy: Qt.NoFocus
+                        text: "Pads"
+                        checkable: true
+                        checked: root.view === "pads"
+                        onClicked: root.view = "pads"
+                    }
+                    Kirigami.Separator { Layout.fillHeight: true; Layout.leftMargin: 6; Layout.rightMargin: 6 }
+                    QQC2.Button {
+                        id: rollButton
+                        focusPolicy: Qt.NoFocus
+                        text: "Roll"
+                        highlighted: loop.held.indexOf("roll") >= 0
+                        onPressed: loop.holdDown("roll")
+                        onReleased: loop.holdUp("roll")
+                        onCanceled: loop.holdUp("roll")
+                        QQC2.ToolTip.text: "Hold (or hold G) and hit pads: they repeat on the beat, and record"
+                        QQC2.ToolTip.visible: hovered
+                    }
+                    QQC2.ComboBox {
+                        focusPolicy: Qt.NoFocus
+                        model: loop.rollRates
+                        currentIndex: loop.rollRateIndex
+                        onActivated: (i) => loop.setRollRate(i)
+                        implicitWidth: Kirigami.Units.gridUnit * 5
+                    }
+                    Kirigami.Separator { Layout.fillHeight: true; Layout.leftMargin: 6; Layout.rightMargin: 6 }
+                    Repeater {
+                        model: loop.glitches
+                        delegate: QQC2.Button {
+                            required property var modelData
+                            focusPolicy: Qt.NoFocus
+                            text: modelData.label.replace("Stutter ", "")
+                            icon.name: modelData.id.startsWith("stutter") ? "media-playlist-repeat"
+                                     : modelData.id === "tapestop" ? "media-playback-pause"
+                                     : modelData.id === "reverse" ? "media-seek-backward" : "media-skip-backward"
+                            highlighted: loop.glitchMode === modelData.id
+                            onPressed: loop.holdDown("g." + modelData.id)
+                            onReleased: loop.holdUp("g." + modelData.id)
+                            onCanceled: loop.holdUp("g." + modelData.id)
+                            QQC2.ToolTip.text: modelData.label + " — hold (key " + modelData.key + ")"
+                            QQC2.ToolTip.visible: hovered
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
                 Kirigami.InlineMessage {
                     Layout.fillWidth: true
                     visible: loop.assigning !== ""
@@ -297,6 +381,7 @@ Kirigami.ApplicationWindow {
 
                 // --- step sequencer: 16 parts x 16 steps (a bar per page) ---------------
                 Rectangle {
+                    visible: root.view === "steps"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: Kirigami.Units.gridUnit * 14
@@ -358,6 +443,10 @@ Kirigami.ApplicationWindow {
                                 Layout.fillHeight: true
                                 spacing: 2
 
+                                readonly property bool isMuted: loop.muted.indexOf(sound) >= 0
+                                readonly property bool isSoloed: loop.soloed.indexOf(sound) >= 0
+                                readonly property bool silent: isMuted || (loop.soloed.length > 0 && !isSoloed)
+                                opacity: silent ? 0.45 : 1
                                 Rectangle {  // part name: click selects it for editing
                                     Layout.preferredWidth: Kirigami.Units.gridUnit * 6.5
                                     Layout.minimumWidth: Kirigami.Units.gridUnit * 6.5
@@ -377,9 +466,35 @@ Kirigami.ApplicationWindow {
                                     }
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: loop.selectPad(row.sound)
+                                        onClicked: { loop.selectPad(row.sound); keyCatcher.forceActiveFocus() }
                                         onDoubleClicked: loop.hitPad(row.sound)
                                     }
+                                }
+                                QQC2.ToolButton {
+                                    focusPolicy: Qt.NoFocus
+                                    Layout.fillHeight: true
+                                    implicitWidth: Kirigami.Units.gridUnit * 1.3
+                                    padding: 0
+                                    text: "M"
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                    checkable: true
+                                    checked: row.isMuted
+                                    onClicked: loop.toggleMute(row.sound)
+                                    QQC2.ToolTip.text: "Mute (Ctrl + its key)"
+                                    QQC2.ToolTip.visible: hovered
+                                }
+                                QQC2.ToolButton {
+                                    focusPolicy: Qt.NoFocus
+                                    Layout.fillHeight: true
+                                    implicitWidth: Kirigami.Units.gridUnit * 1.3
+                                    padding: 0
+                                    text: "S"
+                                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                                    checkable: true
+                                    checked: row.isSoloed
+                                    onClicked: loop.toggleSolo(row.sound)
+                                    QQC2.ToolTip.text: "Solo (Alt + its key)"
+                                    QQC2.ToolTip.visible: hovered
                                 }
                                 Repeater {
                                     model: 16
@@ -399,6 +514,7 @@ Kirigami.ApplicationWindow {
                                         MouseArea {
                                             anchors.fill: parent
                                             acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                            onPressed: keyCatcher.forceActiveFocus()
                                             onClicked: (mouse) => mouse.button === Qt.RightButton || (mouse.modifiers & Qt.ShiftModifier)
                                                 ? loop.cycleStepVelocity(row.sound, cell.index)
                                                 : loop.toggleStep(row.sound, cell.index)
@@ -410,15 +526,91 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
+                // --- big pads (Pads view) ---------------------------------------------------
+                GridLayout {
+                    visible: root.view === "pads"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: Kirigami.Units.gridUnit * 16
+                    columns: 4
+                    rowSpacing: Kirigami.Units.smallSpacing * 2
+                    columnSpacing: Kirigami.Units.smallSpacing * 2
+                    Repeater {
+                        id: bigPads
+                        model: 16
+                        delegate: Rectangle {
+                            id: bp
+                            required property int index
+                            readonly property int sound: (3 - Math.floor(index / 4)) * 4 + index % 4
+                            readonly property color base: root.soundColor(sound)
+                            readonly property bool isMuted: loop.muted.indexOf(sound) >= 0
+                            readonly property bool isSoloed: loop.soloed.indexOf(sound) >= 0
+                            property real glow: 0
+                            function flash(vel) { glow = 0.35 + 0.65 * vel; bpFade.restart() }
+                            NumberAnimation { id: bpFade; target: bp; property: "glow"; to: 0; duration: 260; easing.type: Easing.OutQuad }
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 10
+                            Layout.preferredHeight: 10
+                            radius: Kirigami.Units.cornerRadius * 2
+                            opacity: isMuted || (loop.soloed.length > 0 && !isSoloed) ? 0.45 : 1
+                            color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, glow))
+                            border.width: loop.selectedSound === sound ? 3 : 1
+                            border.color: loop.selectedSound === sound ? Qt.lighter(base, 1.6) : Qt.alpha(base, 0.7)
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onPressed: (mouse) => {
+                                    keyCatcher.forceActiveFocus()
+                                    if (mouse.button === Qt.RightButton) loop.padDown(bp.sound, "select")
+                                    else loop.padDown(bp.sound, root.how(mouse.modifiers))
+                                }
+                                onReleased: loop.padUp(bp.sound)
+                            }
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: Kirigami.Units.smallSpacing * 2
+                                RowLayout {
+                                    QQC2.Label { text: bp.sound + 1; font.bold: true; opacity: 0.7 }
+                                    Item { Layout.fillWidth: true }
+                                    QQC2.Label { text: root.padKeys[bp.sound]; opacity: 0.5; font.family: "monospace" }
+                                }
+                                Item { Layout.fillHeight: true }
+                                RowLayout {
+                                    Kirigami.Heading {
+                                        Layout.fillWidth: true
+                                        level: 2
+                                        text: loop.padLabels[bp.sound] || "—"
+                                        elide: Text.ElideRight
+                                    }
+                                    QQC2.ToolButton {
+                                        focusPolicy: Qt.NoFocus
+                                        text: "M"; checkable: true; checked: bp.isMuted
+                                        onClicked: loop.toggleMute(bp.sound)
+                                    }
+                                    QQC2.ToolButton {
+                                        focusPolicy: Qt.NoFocus
+                                        text: "S"; checkable: true; checked: bp.isSoloed
+                                        onClicked: loop.toggleSolo(bp.sound)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // --- pads + the selected pad's sound --------------------------------------
                 RowLayout {
                     Layout.fillWidth: true
+                    Layout.fillHeight: false
                     Layout.preferredHeight: Kirigami.Units.gridUnit * 15.5
                     Layout.minimumHeight: Kirigami.Units.gridUnit * 15.5
+                    Layout.maximumHeight: Kirigami.Units.gridUnit * 15.5
                     spacing: Kirigami.Units.largeSpacing
 
                     GridLayout {
                         id: pads
+                        visible: root.view === "steps"
                         columns: 4
                         rowSpacing: 4
                         columnSpacing: 4
@@ -428,9 +620,11 @@ Kirigami.ApplicationWindow {
                         property bool assignMode: assignSwitch.checked
 
                         function flash(sound, vel) {
-                            for (let i = 0; i < padRepeater.count; i++) {
-                                const it = padRepeater.itemAt(i)
-                                if (it && it.sound === sound) it.flash(vel)
+                            for (const rep of [padRepeater, bigPads]) {
+                                for (let i = 0; i < rep.count; i++) {
+                                    const it = rep.itemAt(i)
+                                    if (it && it.sound === sound) it.flash(vel)
+                                }
                             }
                         }
 
@@ -476,7 +670,14 @@ Kirigami.ApplicationWindow {
                                 }
                                 MouseArea {
                                     anchors.fill: parent
-                                    onPressed: pads.assignMode ? loop.assign("sound:" + pad.sound) : loop.hitPad(pad.sound)
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onPressed: (mouse) => {
+                                        keyCatcher.forceActiveFocus()
+                                        if (pads.assignMode) loop.assign("sound:" + pad.sound)
+                                        else if (mouse.button === Qt.RightButton) loop.padDown(pad.sound, "select")
+                                        else loop.padDown(pad.sound, root.how(mouse.modifiers))
+                                    }
+                                    onReleased: loop.padUp(pad.sound)
                                 }
                             }
                         }
@@ -503,7 +704,11 @@ Kirigami.ApplicationWindow {
                                     text: "Pad " + (loop.selectedSound + 1) + " · " + (loop.padLabels[loop.selectedSound] || "")
                                 }
                                 Item { Layout.fillWidth: true }
-                                QQC2.Label { text: "Sound of the selected pad"; opacity: 0.5; font: Kirigami.Theme.smallFont }
+                                QQC2.Label {
+                                    text: "Select a part: click its name, right-click a pad, Shift + its key, or hold Select + pad"
+                                    opacity: 0.5
+                                    font: Kirigami.Theme.smallFont
+                                }
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -567,6 +772,66 @@ Kirigami.ApplicationWindow {
                 ColumnLayout {
                     width: parent.width
                     spacing: Kirigami.Units.largeSpacing
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Kirigami.Heading { level: 3; text: "Sound" }
+                        QQC2.Label {
+                            Layout.fillWidth: true
+                            text: loop.soundName
+                            elide: Text.ElideRight
+                            opacity: 0.7
+                        }
+                        QQC2.ToolButton {
+                            focusPolicy: Qt.NoFocus
+                            icon.name: "go-previous"
+                            onClicked: loop.runAction("sound_prev")
+                            QQC2.ToolTip.text: "Previous saved sound ([)"
+                            QQC2.ToolTip.visible: hovered
+                        }
+                        QQC2.ToolButton {
+                            focusPolicy: Qt.NoFocus
+                            icon.name: "go-next"
+                            onClicked: loop.runAction("sound_next")
+                            QQC2.ToolTip.text: "Next saved sound (])"
+                            QQC2.ToolTip.visible: hovered
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        QQC2.TextField {
+                            id: soundName
+                            Layout.fillWidth: true
+                            placeholderText: "Name this sound (kit, pads, master)"
+                            onAccepted: if (loop.saveSound(text)) keyCatcher.forceActiveFocus()
+                        }
+                        QQC2.Button {
+                            focusPolicy: Qt.NoFocus
+                            icon.name: "document-save"
+                            text: "Save"
+                            enabled: soundName.text.trim() !== ""
+                            onClicked: { loop.saveSound(soundName.text); keyCatcher.forceActiveFocus() }
+                        }
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        Repeater {
+                            model: loop.soundNames
+                            delegate: QQC2.Button {
+                                required property string modelData
+                                focusPolicy: Qt.NoFocus
+                                text: modelData
+                                checkable: true
+                                checked: loop.soundName === modelData
+                                onClicked: { loop.loadSound(modelData); soundName.text = modelData }
+                                QQC2.ToolTip.text: "Switch to this sound (right-click deletes)"
+                                QQC2.ToolTip.visible: hovered
+                                TapHandler { acceptedButtons: Qt.RightButton; onTapped: loop.deleteSound(modelData) }
+                            }
+                        }
+                    }
+                    Kirigami.Separator { Layout.fillWidth: true }
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -658,7 +923,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: Text.Wrap
                         opacity: 0.6
                         font: Kirigami.Theme.smallFont
-                        text: "The numbered dials are on the knobs (CC 70–77). K, or a button assigned to “Knobs: pad / master”, switches page. Pad knobs act on the selected pad: the last one you hit or clicked."
+                        text: "The numbered dials are on the knobs (CC 70–77). K, or a button assigned to “Knobs: pad / master”, switches page. Pad knobs act on the selected part, which only changes when you choose it (playing pads doesn't move it)."
                     }
 
                     Kirigami.Separator { Layout.fillWidth: true }
@@ -677,7 +942,7 @@ Kirigami.ApplicationWindow {
                             id: saveName
                             Layout.fillWidth: true
                             placeholderText: "Name"
-                            onAccepted: if (loop.saveLoop(text)) focus = false
+                            onAccepted: if (loop.saveLoop(text)) keyCatcher.forceActiveFocus()
                         }
                         QQC2.Button {
                             focusPolicy: Qt.NoFocus

@@ -130,10 +130,34 @@ Presets for the master: **Clean**, **Abyss** (big, dark, octave-down shimmer, do
 ping-pong, fuzz, glued and limited), **Bloom**, **Reverse swell**, **Crushed**.
 
 **Knobs:** the LPD8's knobs 1–8 (CC 70–77) are on a page: **Pad** (level, pitch, attack,
-decay, cutoff, resonance, drive, reverb send of the selected pad) or **Master** (filter,
+decay, cutoff, resonance, drive, reverb send of the selected part) or **Master** (filter,
 resonance, drive, delay, echoes, reverb, size, compress). The numbered dials show which. K
-switches page, or a controller button assigned to it. Any dial can be given its own knob or
-fader instead (the small controller icon under it). Double-click a dial to reset it.
+switches page, or a controller button assigned to it. Any dial can be given its own knob,
+fader or gamepad axis instead (the small controller icon under it). Double-click a dial to
+reset it. The selected part only changes when you choose it (click its name, right-click a
+pad, Shift + its key, or hold **Select** + pad); playing pads never moves it.
+
+**Performance**
+- **Roll:** hold Roll (G, or a controller button) and hold pads: they repeat on the beat at
+  1/8, 1/16, 1/16 triplet or 1/32, and record while recording.
+- **Mute / solo** each part (M / S, Ctrl / Alt + its key, or hold Mute / Solo + pad).
+  They affect the pattern; pads you play always sound.
+- **Glitches**, held: stutter 1/4, 1/8, 1/16, 1/32 (the last slice on repeat), tape stop,
+  reverse (the last beat backwards), half speed. Keys 5–0 and -, the buttons above the
+  grid, or controller buttons.
+- **Live bends, on purpose:** pitch acts on sounds already ringing (turn it during a crash
+  for a dive-bomb), stepping a little each block; delay time glides like tape, so changing
+  it warbles the echoes; reverb size stretches its lines, so turning it bends the tail.
+- **Pads view:** big pads with mute and solo, next to the step view.
+
+**Sounds:** save the whole sound (kit, every pad, the master) under a name, and switch
+between saved sounds with the buttons, [ and ], or controller buttons ("Next/Previous saved
+sound"). Kept in `~/.local/share/chimp/sounds/`.
+
+**Gamepads and analog keyboards:** with python-evdev installed, gamepads are controllers
+too: sticks and triggers can be given any parameter (sticks rest in the middle: spring-
+loaded modulation; the filter's centre is "off"), buttons any sound or action. A Wooting
+keyboard in gamepad mode shows up the same way, so analog key depth can drive a parameter.
 
 **Pads and buttons:** notes 36–51 play sounds 1–16, so an LPD8 program on notes 36–43 plays
 Kick, Snare, Clap, Hi-hat, Open hat, Rim, Tom, Crash, and a KO II group the first 12. **Assign

@@ -1,9 +1,10 @@
 """Per-pad sound: each pad's settings and the sample they make.
 
-The shaping settings (reverse, pitch, drive, filter, punch, envelope) are rendered into
-the pad's sample once, when they change, by a background thread, so playing a pad costs
-nothing extra and a knob sweep never stalls the audio. Level, pan and the delay/reverb
-sends are applied as it plays, so they act at once.
+The shaping settings (reverse, drive, filter, punch, envelope) are rendered into the
+pad's sample once, when they change, by a background thread, so playing a pad costs
+nothing extra and a knob sweep never stalls the audio. Level, pan, the delay/reverb sends
+and pitch are applied as it plays, so they act at once, pitch even on a sound already
+ringing (turn it during a crash for a dive-bomb).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ PAD_CHOICES: dict[str, tuple[str, object, tuple]] = {
     "drive_type": ("Drive", "soft", dsp.DRIVE_TYPES),
     "reverse": ("Reverse", False, (False, True)),
 }
-MIX_ONLY = {"level", "pan", "delay", "reverb"}  # not baked into the sample
+MIX_ONLY = {"level", "pan", "delay", "reverb", "pitch"}  # not baked into the sample
 PITCH_RANGE = 24  # semitones either way
 OPEN_CUTOFF = {"lp": 1.0, "hp": 0.0, "bp": 0.5}
 
@@ -59,7 +60,6 @@ def shaped(pad: dict) -> bool:
     """Anything to render, or is the sample played as it is?"""
     return (
         pad["reverse"]
-        or semitones(pad) != 0
         or pad["drive"] > 0
         or filter_on(pad)
         or pad["punch"] > 0
@@ -69,12 +69,6 @@ def shaped(pad: dict) -> bool:
 
 def render(raw: np.ndarray, pad: dict, rate: int) -> np.ndarray:
     x = raw[::-1] if pad["reverse"] else raw
-    st = semitones(pad)
-    if st:
-        ratio = 2.0 ** (st / 12)
-        pos = np.arange(0, len(x) - 1, ratio)
-        idx = np.arange(len(x))
-        x = np.stack([np.interp(pos, idx, x[:, c]) for c in (0, 1)], axis=1)
     x = dsp.drive(np.asarray(x, np.float32), pad["drive_type"], pad["drive"])
     if filter_on(pad):
         q = dsp.resonance_q(pad["resonance"])

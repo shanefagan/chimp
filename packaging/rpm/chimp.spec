@@ -57,6 +57,7 @@ Requires:       gtk3
 Requires:       systemd
 Requires:       hicolor-icon-theme
 Recommends:     python3-pulsectl
+Recommends:     python3-evdev
 Recommends:     pipewire-pulseaudio
 Suggests:       obs-studio
 Provides:       bundled(python3dist(python-rtmidi)) = %{rtmidi_version}

@@ -25,11 +25,13 @@ from .engine import (
     Engine,
     master_defaults,
 )
-from .fx import DELAY_TIMES, REVERB_MODES
+from .fx import DELAY_TIMES, GLITCHES, REVERB_MODES
+from .gamepad import Gamepads
 from .kit import NUM_SOUNDS, kit_dirs, load_kit
-from .mapping import ACTIONS, LoopSettings, describe, key_of, value_of
+from .mapping import ACTIONS, HOLD_ACTIONS, LoopSettings, describe, key_of, release_of, value_of
 
 QUANTISE_LABELS = {0: "Off", 4: "1/4", 8: "1/8", 16: "1/16", 32: "1/32"}
+ROLL_RATES = [(8, "1/8"), (16, "1/16"), (24, "1/16T"), (32, "1/32")]
 CHOICE_LABELS = {
     "filter_type": {"lp": "Low-pass", "hp": "High-pass", "bp": "Band-pass"},
     "drive_type": {"soft": "Soft", "hard": "Hard clip", "fuzz": "Fuzz", "crush": "Crush"},
@@ -70,9 +72,16 @@ class LoopController(QObject):
         self._page = 0
         self._follow = True  # the grid page follows the playhead
         self._apply_settings()
+        self._held: set[str] = set()  # hold actions down right now (roll, select, mute, solo, g.*)
+        # presses a held select/mute/solo already handled on the input thread: the UI skips them
+        self._consumed: set[tuple[str, str]] = set()
+        self._sound_name = ""
         self.hub = MidiHub("Chimp Loop", realtime=self._on_midi_now)
         self.hub.message.connect(self._on_midi_ui)
         self.hub.devicesChanged.connect(self.changed)
+        self.pads = Gamepads(self._input_now)
+        self.pads.event.connect(self._input_ui)
+        self.pads.devicesChanged.connect(self.changed)
         self._timer = QTimer(self, interval=33, timeout=self._on_tick)
         # The LPD8 on one of its desktop programs belongs to the desktop service: its knobs
         # (CC 70-77 on every program, out of the box) mustn't also turn the looper's.
@@ -85,12 +94,14 @@ class LoopController(QObject):
     def start(self) -> None:
         self._poll_status()
         self.hub.start()
+        self.pads.start()
         self._timer.start()
         self._status_timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
         self.hub.stop()
+        self.pads.stop()
         self._save_settings()
         self.e.close()
 
@@ -169,45 +180,124 @@ class LoopController(QObject):
             return target[6:]
         return None
 
-    def _on_midi_now(self, device: str, msg: list[int]) -> None:
-        """rtmidi's thread: sounds and knobs act at once. Everything else waits for the UI."""
-        if self._assigning or self._ignored(device):
-            return
+    @staticmethod
+    def _events(msg: list[int]) -> list[tuple[str, str, float]]:
+        """A MIDI message as (kind, key, value) inputs: a value (knob position), a press
+        (with velocity), a release."""
+        out = []
         v = value_of(msg)
         if v is not None:
-            pid = self._param_of(self.s.target(device, v[0]))
-            if pid:
-                self.e.set_param(pid, v[1])
-                return
+            out.append(("value", v[0], v[1]))
         k = key_of(msg)
-        if k is None:
-            return
-        target = self.s.target(device, k[0])
-        if target and target.startswith("sound:"):
-            self.e.trigger(int(target[6:]), k[1], time.monotonic())
+        if k is not None:
+            out.append(("press", k[0], k[1]))
+        r = release_of(msg)
+        if r is not None:
+            out.append(("release", r, 0.0))
+        return out
+
+    def _on_midi_now(self, device: str, msg: list[int]) -> None:
+        for kind, key, value in self._events(msg):
+            if self._input_now(device, kind, key, value):
+                return
 
     def _on_midi_ui(self, device: str, msg: list[int]) -> None:
-        if self._ignored(device):
-            return
-        if self._assigning.startswith("param:"):
-            v = value_of(msg)
-            if v is not None:  # a knob or fader: learn it
-                self._learn(device, v[0])
-            return
-        k = key_of(msg)
-        if k is None:
-            return
-        key, vel = k
-        if self._assigning:
-            self._learn(device, key)
-            return
+        for kind, key, value in self._events(msg):
+            if self._input_ui(device, kind, key, value):
+                return
+
+    def _input_now(self, device: str, kind: str, key: str, value: float) -> bool:
+        """MIDI/gamepad thread: anything timing-critical acts here at once (sounds,
+        knobs, rolls, glitches). True if the input was a knob (so a CC isn't also a press)."""
+        if self._assigning or self._ignored(device):
+            return False
         target = self.s.target(device, key)
+        if kind == "value":
+            pid = self._param_of(target)
+            if pid:
+                self.e.set_param(pid, value)
+                return True
+            return False
         if not target or self._param_of(target):
-            return
+            return False
         if target.startswith("sound:"):
-            self.padHit.emit(int(target[6:]), vel)
-        else:
+            sound = int(target[6:])
+            if kind == "press":
+                if self._modify(sound):  # decided now, while the modifier is surely down
+                    self._consumed.add((device, key))
+                    return False
+                if "roll" in self._held:
+                    self.e.roll_start(sound, value, time.monotonic())
+                else:
+                    self.e.trigger(sound, value, time.monotonic())
+            else:
+                self.e.roll_stop(sound)
+        elif target in HOLD_ACTIONS:
+            self._hold(target, kind == "press")
+        return False
+
+    def _input_ui(self, device: str, kind: str, key: str, value: float) -> bool:
+        if self._ignored(device):
+            return False
+        if self._assigning:
+            if self._assigning.startswith("param:"):
+                if kind == "value" and self._moved(key, value):
+                    self._learn(device, key)
+                    return True
+            elif kind == "press":
+                self._learn(device, key)
+                return True
+            return False
+        target = self.s.target(device, key)
+        if kind == "value":
+            return bool(self._param_of(target))
+        if not target or self._param_of(target):
+            return False
+        if target.startswith("sound:") and kind == "press":
+            if (device, key) in self._consumed:
+                self._consumed.discard((device, key))
+                self.changed.emit()
+            else:
+                self.padHit.emit(int(target[6:]), value)
+        elif target in HOLD_ACTIONS:
+            self.changed.emit()
+        elif kind == "press":
             self.runAction(target)
+        return False
+
+    @staticmethod
+    def _moved(key: str, value: float) -> bool:
+        """Clearly moved, not resting jitter: triggers rest at 0, sticks in the middle."""
+        if not key.startswith("gpa:"):
+            return True
+        if key[4:] in ("ABS_Z", "ABS_RZ", "ABS_GAS", "ABS_BRAKE", "ABS_THROTTLE"):
+            return value > 0.3
+        return abs(value - 0.5) > 0.25
+
+    def _hold(self, name: str, down: bool) -> None:
+        if down:
+            self._held.add(name)
+            if name.startswith("g."):
+                self.e.glitch(name[2:])
+        else:
+            self._held.discard(name)
+            if name.startswith("g."):
+                self.e.glitch_off(name[2:])
+            elif name == "roll":
+                for sound in self.e.rolling():
+                    self.e.roll_stop(sound)
+
+    def _modify(self, sound: int) -> bool:
+        """A pad hit while select/mute/solo is held: do that instead of playing."""
+        if "select" in self._held:
+            self.e.select(sound)
+        elif "mute" in self._held:
+            self.e.toggle_mute(sound)
+        elif "solo" in self._held:
+            self.e.toggle_solo(sound)
+        else:
+            return False
+        return True
 
     def _learn(self, device: str, key: str) -> None:
         what = self._assigning
@@ -323,7 +413,7 @@ class LoopController(QObject):
 
     @Property("QStringList", notify=changed)
     def devices(self) -> list[str]:
-        return self.hub.devices
+        return self.hub.devices + self.pads.names
 
     @Property(str, notify=changed)
     def latencyText(self) -> str:
@@ -332,6 +422,142 @@ class LoopController(QObject):
     def set_latency(self, frames: int, device: str) -> None:
         self._latency_text = f"{device} · {frames / self.e.rate * 1000:.0f} ms"
         self.changed.emit()
+
+    # --- performance ----------------------------------------------------------------------
+
+    @Property("QVariantList", notify=changed)
+    def muted(self) -> list:
+        return sorted(self.e.muted)
+
+    @Property("QVariantList", notify=changed)
+    def soloed(self) -> list:
+        return sorted(self.e.soloed)
+
+    @Property("QStringList", notify=tick)
+    def held(self) -> list[str]:
+        return sorted(self._held)
+
+    @Property(str, notify=tick)
+    def glitchMode(self) -> str:
+        return self.e.master.glitch.mode
+
+    @Property("QVariantList", constant=True)
+    def glitches(self) -> list:
+        keys = {"stutter4": "5", "stutter8": "6", "stutter16": "7", "stutter32": "8", "tapestop": "9",
+                "reverse": "0", "half": "-"}  # fmt: skip
+        return [{"id": m, "label": label, "key": keys.get(m, "")} for m, label in GLITCHES]
+
+    @Property("QStringList", constant=True)
+    def rollRates(self) -> list[str]:
+        return [label for _n, label in ROLL_RATES]
+
+    @Property(int, notify=changed)
+    def rollRateIndex(self) -> int:
+        rates = [n for n, _l in ROLL_RATES]
+        return rates.index(self.e.roll_rate) if self.e.roll_rate in rates else 1
+
+    @Slot(int)
+    def setRollRate(self, i: int) -> None:
+        self.e.roll_rate = ROLL_RATES[max(0, min(i, len(ROLL_RATES) - 1))][0]
+        self.changed.emit()
+
+    @Slot(int, str)
+    def padDown(self, sound: int, how: str = "") -> None:
+        """A pad on screen or the keyboard. how: "" plays (or rolls while roll is held),
+        "select" / "mute" / "solo" do that instead."""
+        if self._assigning:
+            return
+        if how == "select":
+            self.e.select(sound)
+        elif how == "mute":
+            self.e.toggle_mute(sound)
+        elif how == "solo":
+            self.e.toggle_solo(sound)
+        elif not self._modify(sound):
+            if "roll" in self._held:
+                self.e.roll_start(sound, 1.0)
+            else:
+                self.e.trigger(sound, 1.0)
+            self.padHit.emit(sound, 1.0)
+        self.changed.emit()
+
+    @Slot(int)
+    def padUp(self, sound: int) -> None:
+        self.e.roll_stop(sound)
+
+    @Slot(str)
+    def holdDown(self, name: str) -> None:
+        self._hold(name, True)
+        self.changed.emit()
+
+    @Slot(str)
+    def holdUp(self, name: str) -> None:
+        self._hold(name, False)
+        self.changed.emit()
+
+    @Slot(int)
+    def toggleMute(self, sound: int) -> None:
+        self.e.toggle_mute(sound)
+
+    @Slot(int)
+    def toggleSolo(self, sound: int) -> None:
+        self.e.toggle_solo(sound)
+
+    # --- saved sounds -----------------------------------------------------------------------
+
+    @Property("QStringList", notify=changed)
+    def soundNames(self) -> list[str]:
+        return files.sounds()
+
+    @Property(str, notify=changed)
+    def soundName(self) -> str:
+        return self._sound_name
+
+    @Slot(str, result=bool)
+    def saveSound(self, name: str) -> bool:
+        if not name.strip():
+            return False
+        path = files.save_sound(self.e, self._kit_name, name)
+        self._sound_name = path.stem
+        self.notify.emit(f"Saved sound {path.stem}")
+        self.changed.emit()
+        return True
+
+    @Slot(str)
+    def loadSound(self, name: str) -> None:
+        try:
+            d = files.read_sound(name)
+        except (OSError, ValueError) as exc:
+            self.notify.emit(f"Couldn't open {name}: {exc}")
+            return
+        names = [k.name for k in self._kits]
+        if d.get("kit") in names and d["kit"] != self._kit_name:
+            self._load_kit(names.index(d["kit"]))
+        self.e.apply_sound_settings(d.get("sound") or {})
+        self._sound_name = name
+        self._save_later.start()
+        self.changed.emit()
+
+    @Slot(str)
+    def deleteSound(self, name: str) -> None:
+        files.delete_sound(name)
+        if name == self._sound_name:
+            self._sound_name = ""
+        self.changed.emit()
+
+    def _step_sound(self, d: int) -> None:
+        names = files.sounds()
+        if not names:
+            self.notify.emit("No saved sounds yet")
+            return
+        i = names.index(self._sound_name) if self._sound_name in names else (-1 if d > 0 else 0)
+        name = names[(i + d) % len(names)]
+        self.loadSound(name)
+        self.notify.emit(f"Sound: {name}")
+
+    @Property("QStringList", notify=changed)
+    def gamepads(self) -> list[str]:
+        return self.pads.names
 
     # --- step grid -----------------------------------------------------------------------
 
@@ -602,6 +828,10 @@ class LoopController(QObject):
         elif action == "page":
             self.setKnobPage("master" if e.knob_page == "pad" else "pad")
             self.notify.emit(f"Knobs: {e.knob_page}")
+        elif action == "sound_next":
+            self._step_sound(1)
+        elif action == "sound_prev":
+            self._step_sound(-1)
         self.changed.emit()
 
     @Slot(float)

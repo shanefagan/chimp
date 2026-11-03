@@ -1,6 +1,6 @@
 """Which MIDI message does what in the looper."""
 
-from chimp.loop.mapping import LoopSettings, key_of, value_of
+from chimp.loop.mapping import HOLD_ACTIONS, LoopSettings, describe, key_of, release_of, value_of
 
 
 def test_defaults_notes_play_sounds_and_lpd8_knobs_turn_params():
@@ -46,3 +46,15 @@ def test_settings_round_trip(tmp_path):
         {"swing": 0.4},
         {"KO II": {"note:1:60": "undo"}},
     )
+
+
+def test_releases_and_hold_actions():
+    assert release_of([0x80, 36, 0]) == "note:1:36"
+    assert release_of([0x90, 36, 0]) == "note:1:36"
+    assert release_of([0xB0, 20, 0]) == "cc:1:20"
+    assert release_of([0x90, 36, 90]) is None
+    assert {"roll", "select", "mute", "solo", "g.stutter16", "g.tapestop"} <= HOLD_ACTIONS
+    s = LoopSettings()
+    s.set_assign("Generic X-Box pad", "gpa:ABS_RZ", "param:m.drive")
+    assert s.target("Generic X-Box pad", "gpa:ABS_RZ") == "param:m.drive"
+    assert describe("gpa:ABS_RZ") == "Axis RZ" and describe("gpb:BTN_SOUTH") == "Button SOUTH"

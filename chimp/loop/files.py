@@ -76,6 +76,34 @@ def delete(name: str) -> None:
     (LOOPS_DIR / f"{safe_name(name)}.json").unlink(missing_ok=True)
 
 
+# --- saved sounds: kit + every pad + the master, switchable ---------------------------
+
+SOUNDS_DIR = DATA_DIR / "sounds"
+
+
+def save_sound(e: Engine, kit_name: str, name: str) -> Path:
+    SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    path = SOUNDS_DIR / f"{safe_name(name)}.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"version": 1, "kit": kit_name, "sound": e.sound_settings()}, indent=1))
+    tmp.replace(path)
+    return path
+
+
+def sounds() -> list[str]:
+    if not SOUNDS_DIR.is_dir():
+        return []
+    return sorted((p.stem for p in SOUNDS_DIR.glob("*.json")), key=str.lower)
+
+
+def read_sound(name: str) -> dict:
+    return json.loads((SOUNDS_DIR / f"{safe_name(name)}.json").read_text())
+
+
+def delete_sound(name: str) -> None:
+    (SOUNDS_DIR / f"{safe_name(name)}.json").unlink(missing_ok=True)
+
+
 # --- export ---------------------------------------------------------------------------
 
 

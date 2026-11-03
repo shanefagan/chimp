@@ -15,6 +15,7 @@ import json
 from dataclasses import dataclass, field
 
 from ..desktop.config import CONFIG_DIR
+from .fx import GLITCHES
 from .kit import NUM_SOUNDS
 
 SETTINGS_PATH = CONFIG_DIR / "loop.json"
@@ -31,7 +32,17 @@ ACTIONS: dict[str, str] = {
     "metronome": "Metronome on/off",
     "kit": "Next kit",
     "page": "Knobs: pad / master",
+    "sound_next": "Next saved sound",
+    "sound_prev": "Previous saved sound",
+    # held: act while the button is down
+    "roll": "Hold: roll (+ pad)",
+    "select": "Hold: select part (+ pad)",
+    "mute": "Hold: mute part (+ pad)",
+    "solo": "Hold: solo part (+ pad)",
+    **{f"g.{mode}": f"Hold: {label.lower()}" for mode, label in GLITCHES},
 }
+HOLD_ACTIONS = {"roll", "select", "mute", "solo"} | {f"g.{mode}" for mode, _ in GLITCHES}
+MODIFIERS = ("select", "mute", "solo")  # held, they change what a pad does
 
 
 def key_of(msg: list[int]) -> tuple[str, float] | None:
@@ -61,7 +72,23 @@ def value_of(msg: list[int]) -> tuple[str, float] | None:
     return None
 
 
+def release_of(msg: list[int]) -> str | None:
+    """The key a note-off, or a button CC going below 64, releases."""
+    if len(msg) < 3:
+        return None
+    kind, ch = msg[0] & 0xF0, (msg[0] & 0x0F) + 1
+    if kind == 0x80 or (kind == 0x90 and msg[2] == 0):
+        return f"note:{ch}:{msg[1]}"
+    if kind == 0xB0 and msg[2] < 64:
+        return f"cc:{ch}:{msg[1]}"
+    return None
+
+
 def describe(key: str) -> str:
+    if key.startswith("gpa:"):
+        return "Axis " + key[4:].removeprefix("ABS_")
+    if key.startswith("gpb:"):
+        return "Button " + key[4:].removeprefix("BTN_")
     kind, ch, num = key.split(":")
     name = {"note": f"Note {num}", "cc": f"CC {num}", "pc": f"Program {int(num) + 1}", "pb": "Pitch bend"}[kind]
     return f"{name} · ch {ch}"

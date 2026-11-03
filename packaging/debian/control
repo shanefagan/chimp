@@ -53,6 +53,7 @@ Depends: ${misc:Depends},
          systemd,
          wireplumber
 Recommends: pipewire-pulse,
+            python3-evdev,
             python3-pulsectl
 Suggests: obs-studio
 Description: MIDI controllers as a KDE Plasma control deck

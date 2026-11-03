@@ -100,7 +100,28 @@ class _Voice:
 
     def __init__(self, data: np.ndarray, dry: np.ndarray, dsend: np.ndarray, rsend: np.ndarray, delay: int, slot: int):
         self.data, self.dry, self.dsend, self.rsend = data, dry, dsend, rsend
-        self.delay, self.pos, self.slot = delay, 0, slot
+        self.delay, self.pos, self.slot = delay, 0.0, slot
+
+    def take(self, n: int, rate: float) -> np.ndarray:
+        """Up to n frames from where it is, at `rate` (pitch, read live each block, so a
+        knob turn bends a sound that's already ringing, in steps: on purpose)."""
+        if rate == 1.0 and self.pos == int(self.pos):
+            p = int(self.pos)
+            out = self.data[p : p + n]
+            self.pos = p + len(out)
+            return out
+        last = len(self.data) - 1
+        m = min(n, max(0, int((last - self.pos) / rate)))
+        if m <= 0:
+            self.pos = float(len(self.data))
+            return self.data[:0]
+        idx = self.pos + np.arange(m) * rate
+        i0 = idx.astype(np.int64)
+        frac = (idx - i0).astype(np.float32)[:, None]
+        a = self.data[i0]
+        out = a + (self.data[i0 + 1] - a) * frac
+        self.pos += m * rate
+        return out
 
 
 def _click(rate: int, freq: float, ms: float = 25.0) -> np.ndarray:
@@ -129,7 +150,11 @@ class Engine:
         self.playhead = 0
         self.abs = 0  # frames rendered since start; never wraps
         self.revision = 0  # bumps on every change the UI should redraw for
-        self.selected = 0  # the pad "p." settings act on (last hit or clicked)
+        self.selected = 0  # the pad "p." settings act on: chosen explicitly, not by playing
+        self.muted: set[int] = set()  # parts left out of the pattern's playback
+        self.soloed: set[int] = set()  # if any: only these play from the pattern
+        self.roll_rate = 16  # notes per bar (24 = sixteenth triplets)
+        self._rolls: dict[int, tuple[float, int]] = {}  # sound -> (velocity, abs frame it began)
         self.fixed_velocity = False
         self.knob_page = "pad"
         self.pads = [voice.default_pad() for _ in range(NUM_SOUNDS)]
@@ -358,9 +383,6 @@ class Engine:
             if not (0 <= sound < NUM_SOUNDS) or self.kit is None or self.kit.sounds[sound] is None:
                 return
             vel = 1.0 if self.fixed_velocity else max(0.0, min(1.0, vel))
-            if self.selected != sound:
-                self.selected = sound
-                self._changed()
             self._pending.append((sound, vel))
             if self.state not in ("recording", "overdub"):
                 return
@@ -468,6 +490,71 @@ class Engine:
             self.state = "stopped" if length else "empty"
             self._changed()
 
+    # --- performance: mute/solo, rolls, glitches --------------------------------------
+
+    def toggle_mute(self, sound: int) -> None:
+        with self.lock:
+            self.muted ^= {sound}
+            self._changed()
+
+    def toggle_solo(self, sound: int) -> None:
+        with self.lock:
+            self.soloed ^= {sound}
+            self._changed()
+
+    def _audible(self, sound: int) -> bool:
+        return sound not in self.muted and (not self.soloed or sound in self.soloed)
+
+    def roll_start(self, sound: int, vel: float = 1.0, now: float | None = None) -> None:
+        """Hold to repeat `sound` at roll_rate, on the grid (recorded like any hit)."""
+        with self.lock:
+            if not (0 <= sound < NUM_SOUNDS) or sound in self._rolls:
+                return
+            _, absf = self._heard_now(now)
+            self._rolls[sound] = (1.0 if self.fixed_velocity else vel, absf)
+        self.trigger(sound, vel, now)
+
+    def roll_stop(self, sound: int) -> None:
+        with self.lock:
+            self._rolls.pop(sound, None)
+
+    def rolling(self) -> list[int]:
+        return sorted(self._rolls)
+
+    def glitch(self, mode: str) -> None:
+        with self.lock:
+            self.master.glitch.engage(mode, self.beat_frames())
+            self._changed()
+
+    def glitch_off(self, mode: str | None = None) -> None:
+        with self.lock:
+            self.master.glitch.release(mode)
+            self._changed()
+
+    def _roll_hits(self, n: int) -> None:
+        """Start the rolls' repeats that fall in this block (and record them)."""
+        if not self._rolls:
+            return
+        period = self.bar_frames() / self.roll_rate
+        looping = self.state in ("playing", "overdub", "recording")
+        base = self.playhead if looping else self.abs
+        k = int(np.ceil(base / period))
+        while k * period < base + n:
+            offset = round(k * period - base)
+            if 0 <= offset < n:
+                for sound, (vel, began) in list(self._rolls.items()):
+                    if self._block_abs + offset - began < period * 0.5:
+                        continue  # the press itself just played
+                    self._start(sound, vel, offset)
+                    if self.state in ("recording", "overdub"):
+                        t = round(k * period)
+                        t = t % self.length if self.length else max(0, t)
+                        if not self.layers:
+                            self.layers.append([])
+                        self.layers[-1].append(Hit(t, sound, vel, self._block_abs + offset))
+                        self._changed()
+            k += 1
+
     # --- step sequencer -------------------------------------------------------------
 
     def steps(self) -> int:
@@ -550,6 +637,8 @@ class Engine:
             spans.append((0, start + n - length, length - start))
         for layer in self.layers:
             for h in layer:
+                if not self._audible(h.sound):
+                    continue
                 p = self.placed(h.t)
                 for a, b, off in spans:
                     if a <= p < b:
@@ -589,7 +678,9 @@ class Engine:
                 self._schedule(self.playhead, n)
             elif self.state == "recording" and self.metronome:
                 self._clicks_in([(self.playhead, self.playhead + n, 0)])
+            self._roll_hits(n)
             voices = list(self._voices)
+            rates = [1.0 if v.slot < 0 else 2.0 ** (voice.semitones(self.pads[v.slot]) / 12) for v in voices]
             self.playhead += n
             self.abs += n
             if self.state == "recording" and self.bars and self.playhead >= self.bars * self.bar_frames():
@@ -601,12 +692,12 @@ class Engine:
                 self.playhead = 0
             beat = self.beat_frames()
         alive = []
-        for v in voices:
+        for v, rate in zip(voices, rates, strict=True):
             if v.delay >= n:
                 v.delay -= n
                 alive.append(v)
                 continue
-            take = v.data[v.pos : v.pos + n - v.delay]
+            take = v.take(n - v.delay, rate)
             sl = slice(v.delay, v.delay + len(take))
             if v.slot < 0:
                 clicks[sl] += take
@@ -616,9 +707,8 @@ class Engine:
                     dsend[sl] += take * v.dsend
                 if v.rsend.any():
                     rsend[sl] += take * v.rsend
-            v.pos += len(take)
             v.delay = 0
-            if v.pos < len(v.data):
+            if v.pos < len(v.data) - 1:
                 alive.append(v)
         with self.lock:
             # Keep voices started meanwhile (by trigger) and drop finished/choked ones.

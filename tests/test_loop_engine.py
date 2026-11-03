@@ -192,21 +192,141 @@ def test_swing_pushes_every_second_sixteenth():
     assert e.placed(round(2 * g)) == round(2 * g)
 
 
+def test_playing_a_pad_does_not_move_the_selection():
+    e = engine()
+    e.select(5)
+    e.trigger(2)
+    e.trigger(9)
+    assert e.selected == 5
+
+
 def test_pad_settings_act_on_the_selected_pad_and_render_in_the_background():
     e = engine()
     long = np.ones((RATE, 2), np.float32) * 0.1
     e.kit.sounds[2].data = long
-    e.trigger(2)
-    assert e.selected == 2
-    e.set_param("p.pitch", 0.75)  # +12 semitones: half as long
+    e.select(2)
     e.set_param("p.decay", 0.2)
+    e.set_param("p.pitch", 0.75)  # +12 st: live, not baked into the sample
     assert e.pads[2]["pitch"] == 0.75 and e.pads[0]["pitch"] == 0.5
     assert e.wait_built()
     v = e._data(2)
-    assert len(v) < RATE // 2 and v[-1, 0] == 0.0
+    assert len(v) < RATE // 3 and v[-1, 0] == 0.0
     e.set_param("p.decay", 1.0)
-    e.set_param("p.pitch", 0.5)
-    assert e.wait_built() and e._data(2) is long  # back to the sample as it is
+    assert e.wait_built() and e._data(2) is long  # pitch alone needs no render
+
+
+def test_pitch_bends_a_sound_that_is_already_ringing():
+    e = engine()
+    e.kit.sounds[0].data = np.ones((RATE, 2), np.float32) * 0.1  # a 1 s drone
+    e.select(0)
+    e.trigger(0)
+    e.render(BLOCK)
+    [v] = e._voices
+    before = v.pos
+    e.render(BLOCK)
+    assert v.pos - before == BLOCK
+    e.set_param("p.pitch", 0.75)  # +12 st while it plays
+    before = v.pos
+    e.render(BLOCK)
+    assert v.pos - before == pytest.approx(2 * BLOCK)
+
+
+def test_mute_and_solo_leave_parts_out_of_the_pattern_only():
+    e = engine(bpm=120.0)
+    for i in range(NUM_SOUNDS):
+        e.kit.sounds[i].data = np.ones((RATE, 2), np.float32) * 0.01  # long enough to inspect
+    for s in (0, 1, 2):
+        e.toggle_step(s, 0)
+    e.play_stop()
+
+    def played():
+        e.playhead = 0
+        e._voices.clear()
+        e.render(BLOCK)
+        return sorted(v.slot for v in e._voices)
+
+    assert played() == [0, 1, 2]
+    e.toggle_mute(1)
+    assert played() == [0, 2]
+    e.toggle_solo(2)
+    assert played() == [2]
+    e.trigger(1)  # live playing still sounds, muted or not
+    e._pending and e.render(BLOCK)
+    assert any(v.slot == 1 for v in e._voices)
+
+
+def test_roll_repeats_on_the_grid_and_records():
+    e = engine(bars=1, bpm=120.0, quantise=0)
+    e.roll_rate = 16
+    run(e, 96000 + BLOCK, {0: e.record})
+    e.record()  # overdub
+    period = e.bar_frames() / 16
+    start = e.abs
+    e.roll_start(3, 0.9, e._block_time + (e.abs - e._block_abs) / RATE)
+    run(e, round(period * 4) + BLOCK)
+    e.roll_stop(3)
+    run(e, round(period * 4))
+    ts = sorted(h.t for h in e.hits() if h.sound == 3)
+    assert 4 <= len(ts) <= 6  # the press, then one per sixteenth while held, then nothing
+    gaps = np.diff(ts[1:])
+    assert all(abs(g - period) <= 1 for g in gaps)
+    assert e.abs > start
+
+
+def glitch_run(e: Engine, mode: str, before: int, during: int) -> np.ndarray:
+    out = [e.render(BLOCK) for _ in range(before // BLOCK)]
+    e.glitch(mode)
+    out += [e.render(BLOCK) for _ in range(during // BLOCK)]
+    return np.concatenate(out)[:, 0]
+
+
+def test_stutter_repeats_the_last_sixteenth():
+    e = engine(bpm=120.0)
+    e.kit.sounds[0].data = sine_kit = np.stack([np.linspace(0.1, 0.5, RATE, dtype=np.float32)] * 2, axis=1)
+    del sine_kit
+    e.trigger(0)
+    y = glitch_run(e, "stutter16", RATE // 2, RATE)
+    seg = round(e.bar_frames() / 16)
+    tail = y[RATE // 2 + 2 * seg : RATE // 2 + 4 * seg]
+    # a rising ramp, held to repeat: two consecutive repeats look the same
+    assert np.allclose(tail[: seg - 200][100:], tail[seg : 2 * seg - 200][100:], atol=1e-3)
+
+
+def test_tape_stop_winds_down_to_silence_and_release_is_live_again():
+    e = engine()
+    e.kit.sounds[0].data = np.ones((RATE * 3, 2), np.float32) * 0.2
+    e.trigger(0)
+    y = glitch_run(e, "tapestop", RATE // 4, RATE)
+    assert np.abs(y[-BLOCK:]).max() < 1e-3  # stopped
+    e.glitch_off()
+    back = np.concatenate([e.render(BLOCK) for _ in range(8)])[:, 0]
+    assert np.abs(back[-BLOCK:]).max() > 0.1
+
+
+@pytest.mark.parametrize("mode", ["stutter4", "stutter8", "stutter32", "reverse", "half"])
+def test_glitches_stay_finite_and_bounded(mode):
+    e = engine()
+    for i in range(8):
+        e.trigger(i)
+    y = glitch_run(e, mode, RATE // 3, RATE)
+    assert np.isfinite(y).all() and np.abs(y).max() <= 1.0
+
+
+def test_delay_time_change_glides_and_stays_sane():
+    e = engine(bpm=120.0)
+    e.set_param("m.delay", 0.8)
+    e.set_param("m.echoes", 0.7)
+    e.kit.sounds[0].data = np.ones((RATE, 2), np.float32) * 0.2
+    e.trigger(0)
+    for _ in range(40):
+        e.render(BLOCK)
+    e.set_param("m.delay_time", 0)  # long -> short while echoes ring: tape warble
+    d0 = e.master.delay._d
+    e.render(BLOCK)
+    d1 = e.master.delay._d
+    assert d1 < d0 and d1 > e.beat_frames() * 0.25  # moving, not jumped
+    out = np.concatenate([e.render(BLOCK) for _ in range(100)])
+    assert np.isfinite(out).all()
 
 
 def test_pad_level_and_pan_act_at_once():
