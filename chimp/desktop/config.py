@@ -9,6 +9,7 @@ watches the file and reloads it, so edits in the editor apply immediately.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -390,7 +391,12 @@ class DesktopConfig:
     def save(self, path: Path = CONFIG_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self.to_dict(), indent=2) + "\n")
+        # owner-only: the OBS websocket password can be in here
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(self.to_dict(), indent=2) + "\n")
         tmp.replace(path)
 
 

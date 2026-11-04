@@ -118,3 +118,17 @@ def test_midi_only_hint_shows_once_and_not_after_switch_popup(monkeypatch):
     ctl.active = 2
     ctl._maybe_hint()
     assert len(shown) == 1
+
+
+def test_config_is_private_to_you(tmp_path):
+    # it can hold the OBS websocket password
+    path = tmp_path / "desktop.json"
+    path.write_text("{}")
+    path.chmod(0o644)  # a file from an older Chimp
+    secret = "not-a-real-" + "password"
+    cfg = DesktopConfig()
+    cfg.obs.password = secret
+    cfg.save(path)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert DesktopConfig.load(path).obs.password == secret
+    assert not path.with_suffix(".json.tmp").exists()

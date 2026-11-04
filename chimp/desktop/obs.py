@@ -28,6 +28,14 @@ def _obs_password() -> str:
 
 
 def _auth(password: str, salt: str, challenge: str) -> str:
+    """The obs-websocket v5 login answer, exactly as the protocol defines it.
+
+    This isn't password storage: OBS sends a fresh salt and challenge on every connect
+    and computes the same two SHA-256 steps on its side, so the algorithm is OBS's
+    choice and anything slower (bcrypt, argon2) would simply fail to log in. Nothing
+    hashed is kept. See docs/generated/protocol.md#creating-an-authentication-string
+    in obs-websocket. (Code scanners flag this as weak password hashing: a false positive.)
+    """
     secret = base64.b64encode(hashlib.sha256((password + salt).encode()).digest()).decode()
     return base64.b64encode(hashlib.sha256((secret + challenge).encode()).digest()).decode()
 
