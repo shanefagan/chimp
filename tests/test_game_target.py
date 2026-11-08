@@ -34,3 +34,18 @@ def test_proton_sibling_stream_matched_by_steam_app_id(monkeypatch):
 
 def test_steam_app_id_reads_environ():
     assert system.steam_app_id(os.getpid()) == (os.environ.get("SteamAppId") or "")  # noqa: SIM112 - Steam's own spelling
+
+
+def test_steam_app_id_matches_window_class(monkeypatch):
+    streams = [
+        {"id": 10, "name": "wine64-preloader", "binary": "wine64-preloader", "node": "", "pid": 501, "running": True},
+    ]
+    monkeypatch.setattr(system, "audio_streams", lambda max_age=0.5: streams)
+    monkeypatch.setattr(system, "_ancestors", lambda pid, depth=12: [])
+    monkeypatch.setattr(system, "proc_name", lambda pid: "TapeToTape.exe")
+    # Even if reading /proc/500/environ yields nothing (pid 500 is a launcher/window wrapper)
+    ids = {500: "", 501: "1566200"}
+    monkeypatch.setattr(system, "steam_app_id", lambda pid, app_class="": "1566200" if "1566200" in app_class else ids.get(pid, ""))
+    # streams_for_pid using app_class should match stream 10
+    assert [s["id"] for s in system.streams_for_pid(500, app_class="steam_app_1566200")] == [10]
+

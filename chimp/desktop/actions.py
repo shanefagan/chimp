@@ -181,7 +181,7 @@ class ActionRunner(QObject):
                     "audio-volume-high" if pct and streams else "audio-volume-muted",
                     f"{label}: {pct}%" if streams else label,
                 )
-            self._done(who, label, pct)
+            self._done(who, label, pct if streams else None)
             return
         elif a.type == "brightness":
             system.set_brightness(a.target, frac)
@@ -206,7 +206,7 @@ class ActionRunner(QObject):
             vol = None
             for s in streams:
                 vol = system.change_volume(s["id"], change)
-            pct = round((vol or 0) * 100)
+            pct = round((vol or 0) * 100) if streams else None
             if osd:
                 self._show(system.osd_text, "audio-volume-high", f"{label}: {pct}%" if streams else label)
             self._done(who, label, pct)

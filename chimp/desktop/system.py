@@ -206,11 +206,12 @@ _GAME_MARKERS = (b"wine", b"proton", b".exe", b"steamapps/common")
 
 def looks_like_game(pid: int, app_class: str = "") -> bool:
     """Is this window's process a game? Steam/Proton/Wine/gamescope say so; a fullscreen
-    browser or video player doesn't. Cached per pid."""
+    browser or video player doesn't. Cached per pid while the process stays alive."""
     if pid <= 0:
         return False
-    if pid in _game_cache:
-        return _game_cache[pid]
+    cached = _game_cache.get(pid)
+    if cached is not None and pid_alive(pid):
+        return cached
     cls = app_class.lower()
     result = cls.startswith("steam_app_") or cls == "gamescope"
     if not result:
@@ -243,9 +244,13 @@ def pid_alive(pid: int) -> bool:
 _STEAM_ID_KEYS = (b"SteamAppId=", b"SteamGameId=", b"STEAM_COMPAT_APP_ID=")
 
 
-def steam_app_id(pid: int) -> str:
+def steam_app_id(pid: int, app_class: str = "") -> str:
     """The Steam app id a process was launched with ("" if none). Every process of a
     Proton game has it, whichever of them owns the window, the network or the audio."""
+    if app_class:
+        m = re.search(r"steam_app_(\d+)", app_class.lower())
+        if m:
+            return m.group(1)
     try:
         env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
     except OSError:
@@ -259,7 +264,7 @@ def steam_app_id(pid: int) -> str:
     return ""
 
 
-def streams_for_pid(pid: int) -> list[dict]:
+def streams_for_pid(pid: int, app_class: str = "") -> list[dict]:
     """Playback streams from this process, its children (games often play audio from a
     child), or, for a Steam/Proton game, any process launched as the same Steam app (under
     Proton the window's and the audio's processes can be siblings, not parent and child)."""
@@ -272,7 +277,10 @@ def streams_for_pid(pid: int) -> list[dict]:
     kids = [s for s in streams if s["pid"] and pid in _ancestors(s["pid"])]
     if kids:
         return kids
-    app = steam_app_id(pid)
+    try:
+        app = steam_app_id(pid, app_class)
+    except TypeError:
+        app = steam_app_id(pid)
     if app:
         same_app = [s for s in streams if s["pid"] and steam_app_id(s["pid"]) == app]
         if same_app:
@@ -308,7 +316,7 @@ def resolve_streams(a_type: str, target: str, targets: dict) -> tuple[list[dict]
         t = (targets or {}).get("game" if a_type == "game_volume" else "focused")
         if not t:
             return [], ("No game running" if a_type == "game_volume" else "No focused app")
-        streams = streams_for_pid(int(t["pid"]))
+        streams = streams_for_pid(int(t["pid"]), app_class=str(t.get("name") or ""))
         name = t.get("name") or (streams[0]["name"] if streams else "?")
         return streams, (name if streams else f"{name} (no sound)")
     if a_type == "playing_volume":
