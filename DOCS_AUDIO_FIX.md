@@ -90,3 +90,19 @@ In `chimp/desktop/system.py`:
   .venv/bin/ruff check chimp tests
   ```
   Result: **All checks passed!**
+
+---
+
+## 5. Additional Observations & Notes
+
+1. **System package vs. Local development version:**
+   * Arch package `chimp` installed on the system is version `0.6.1-1` (running via `chimp.service`).
+   * The repo has advanced to `0.7.0` (with Chimp Loop, new kit management, and security improvements).
+   * To deploy this fix and the 0.7.0 release to the active system daemon, re-install or build the updated package using `packaging/PKGBUILD` and restart the user service:
+     ```bash
+     systemctl --user restart chimp
+     ```
+
+2. **Overlay vs. OSD consistency:**
+   * Plasma's native OSD already had a check (`pct and streams`), but the in-app `_done()` callback lacked it. With `pct if streams else None` now in place, both the Plasma OSD and the Chimp on-screen overlay remain completely consistent in behavior when streams are disconnected or no audio is actively routed.
+
