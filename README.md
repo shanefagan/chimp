@@ -257,7 +257,48 @@ which reports activations and fullscreen changes to `com.performativenonsense.ch
 There's no separate voice-chat knob: your own voice is the mic knob, and in-game voice comes
 out of the game's own audio stream.
 Pads: mute mic/speakers, media keys, launch app, any KDE global shortcut, shell command,
-OBS scene / record / stream / source mute (obs-websocket v5; password read from OBS).
+OBS scene / record / stream / source mute (obs-websocket v5; password read from OBS),
+markers, and your own actions from plugins.
+
+**Markers** note a moment to come back to when editing (a flubbed line, a retake). Each is a
+line in a text file in Audacity's label format, `start<TAB>end<TAB>label` in seconds, so it
+imports as a label track (File > Import > Labels) or feeds a script that cuts the recording:
+
+    65.000	65.000	Marker 3 · 20:16:18 · retake · §4 …and that is why the…
+
+- While OBS records, the time is the position in the recording (from OBS, so pauses are left
+  out) and the file is written next to the video, then renamed to `<video>.markers.txt`
+  when the recording stops.
+- Otherwise markers go to `~/Videos/Markers/<date>.markers.txt`, timed from midnight.
+- The label has the marker's number, the clock time, the pad's note (its target field, e.g.
+  "retake") and anything your plugins add (e.g. where a teleprompter is in the script).
+
+**Plugins** add pad and button actions of your own, for things only your machine has (a
+script, an app of yours on the session bus), without changing Chimp. Put a Python file in
+`~/.local/share/chimp/plugins/` (or a folder with an `__init__.py`) and restart chimpd:
+
+```python
+ACTIONS = {
+    "lights_hold": {
+        "label": "Desk lights: on while held",  # in the editor's list
+        "short": "Lights (hold)",  # on the overlay
+        "hold": True,  # release() when the pad is let go
+        "colour": [0, 160, 255],  # the pad's light
+    },
+    # "field" and "hint" name the action's target field, as Chimp's own actions do
+}
+
+
+def press(action, target): ...
+def release(action, target): ...  # for "hold" actions
+def marker_note(): ...  # optional: text added to markers' labels
+```
+
+`ACTIONS` is read from the source without running it (so it has to be a plain literal);
+the plugin is imported the first time one of its actions is used, by chimpd only. Errors
+go to the log and Chimp carries on. A "hold" action needs a momentary pad (Toggle off,
+Note or CC). If a plugin goes missing, its pads keep their action and do nothing until
+it's back.
 
 Logs: `journalctl --user -u chimpd -f`.
 Config: `~/.config/chimp/desktop.json`. The factory Program 4 was backed up to

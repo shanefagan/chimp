@@ -46,7 +46,7 @@ def test_migrates_version_1(tmp_path):
 
 def test_load_tolerates_junk(tmp_path):
     path = tmp_path / "desktop.json"
-    path.write_text(json.dumps({"programs": {"1": {"pads": [{"type": "bogus"}, 7], "knobs": "nope"}, "x": {}}}))
+    path.write_text(json.dumps({"programs": {"1": {"pads": [{"type": "bo gus!"}, 7], "knobs": "nope"}, "x": {}}}))
     cfg = DesktopConfig.load(path)
     assert cfg.actions(1).pads[0].type == "none" and len(cfg.actions(1).pads) == 8
     assert len(cfg.actions(1).knobs) == 8

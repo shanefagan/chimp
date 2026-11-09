@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
@@ -43,6 +44,10 @@ def _auth(password: str, salt: str, challenge: str) -> str:
 class ObsClient(QObject):
     stateChanged = Signal()
     connectedChanged = Signal(bool)
+    # Recording started (with how long it has been running, ms: 0 when it has just started,
+    # more when Chimp connects to an OBS that is already recording) / stopped (the file).
+    recordingStarted = Signal(int)
+    recordingStopped = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -58,6 +63,7 @@ class ObsClient(QObject):
         self._identified = False
         self._next_id = 0
         self._mute_requests: dict[str, str] = {}  # request id -> input name
+        self._callbacks: dict[str, Callable[[bool, dict], None]] = {}  # request id -> callback
         self._ws = QWebSocket()
         self._ws.textMessageReceived.connect(self._on_message)
         self._ws.disconnected.connect(self._on_disconnected)
@@ -87,12 +93,17 @@ class ObsClient(QObject):
     def connected(self) -> bool:
         return self._identified
 
-    def request(self, request_type: str, data: dict | None = None) -> str:
-        """Send a request; returns its id, or "" when not connected."""
+    def request(
+        self, request_type: str, data: dict | None = None, callback: Callable[[bool, dict], None] | None = None
+    ) -> str:
+        """Send a request; returns its id, or "" when not connected. ``callback(ok, data)``
+        gets the answer, failed or not (never called if the connection drops first)."""
         if not self._identified:
             return ""
         self._next_id += 1
         rid = f"{request_type}:{self._next_id}"
+        if callback is not None:
+            self._callbacks[rid] = callback
         msg = {"op": 6, "d": {"requestType": request_type, "requestId": rid}}
         if data:
             msg["d"]["requestData"] = data
@@ -113,6 +124,10 @@ class ObsClient(QObject):
     def _on_disconnected(self) -> None:
         was = self._identified
         self._identified = False
+        self._callbacks.clear()
+        # Unknown until we're back (and OBS closing ends its recording): reconnecting asks
+        # again, which reports a recording that is still going as started.
+        self.recording = False
         if was:
             self.connectedChanged.emit(False)
 
@@ -137,8 +152,14 @@ class ObsClient(QObject):
             self._refresh_inputs()
         elif op == 5:  # Event
             self._on_event(d.get("eventType", ""), d.get("eventData") or {})
-        elif op == 7 and (d.get("requestStatus") or {}).get("result"):  # RequestResponse, succeeded
-            self._on_response(d.get("requestType", ""), d.get("responseData") or {}, d.get("requestId", ""))
+        elif op == 7:  # RequestResponse
+            ok = bool((d.get("requestStatus") or {}).get("result"))
+            rid, data = d.get("requestId", ""), d.get("responseData") or {}
+            callback = self._callbacks.pop(rid, None)
+            if callback is not None:
+                callback(ok, data)
+            if ok:
+                self._on_response(d.get("requestType", ""), data, rid)
 
     def _refresh_inputs(self) -> None:
         for name in self.watch_inputs:
@@ -148,7 +169,9 @@ class ObsClient(QObject):
 
     def _on_response(self, kind: str, data: dict, rid: str) -> None:
         if kind == "GetRecordStatus":
-            self.recording = bool(data.get("outputActive"))
+            was, self.recording = self.recording, bool(data.get("outputActive"))
+            if self.recording and not was:
+                self.recordingStarted.emit(int(data.get("outputDuration") or 0))
         elif kind == "GetStreamStatus":
             self.streaming = bool(data.get("outputActive"))
         elif kind == "GetCurrentProgramScene":
@@ -165,6 +188,11 @@ class ObsClient(QObject):
     def _on_event(self, kind: str, data: dict) -> None:
         if kind == "RecordStateChanged":
             self.recording = bool(data.get("outputActive"))
+            state = data.get("outputState", "")
+            if state == "OBS_WEBSOCKET_OUTPUT_STARTED":
+                self.recordingStarted.emit(0)
+            elif state == "OBS_WEBSOCKET_OUTPUT_STOPPED":
+                self.recordingStopped.emit(data.get("outputPath") or "")
         elif kind == "StreamStateChanged":
             self.streaming = bool(data.get("outputActive"))
         elif kind == "CurrentProgramSceneChanged":

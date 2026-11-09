@@ -11,8 +11,9 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer
 
-from . import system
-from .config import KNOB_ACTIONS, MEDIA_SHORTCUTS, PAD_ACTIONS, Action
+from . import plugins, system
+from .config import HOLD_ACTIONS, KNOB_ACTIONS, MEDIA_SHORTCUTS, PAD_ACTIONS, Action
+from .markers import Markers
 
 STEP_PERCENT = 2  # per encoder tick
 OSD_INTERVAL_S = 0.12
@@ -54,6 +55,12 @@ class ActionRunner(QObject):
         self._osd_last = 0.0
         self._osd_pending: tuple | None = None
         self._osd_timer = QTimer(self, singleShot=True, timeout=self._osd_flush)
+        self.markers = Markers(obs, self._marked, parent=self)
+
+    def _marked(self, summary: str) -> None:
+        self._report(summary)
+        if self._osd() and self._level_osd():
+            self._show(system.osd_text, "bookmark-new", summary)
 
     # --- on-screen display (throttled) -----------------------------------------------
 
@@ -103,6 +110,10 @@ class ActionRunner(QObject):
             system.invoke_shortcut(comp, name)
         elif a.type == "command":
             system.run_command(t)
+        elif a.type == "marker":
+            self.markers.add(t)
+        elif plugins.handles(a.type):
+            plugins.press(a.type, t)
         elif a.type.startswith("obs_"):
             if not self.obs.connected:
                 self._report(f"{who} → OBS isn't running")
@@ -117,6 +128,11 @@ class ActionRunner(QObject):
                 self.obs.request("ToggleStream")
             elif a.type == "obs_mute":
                 self.obs.request("ToggleInputMute", {"inputName": t})
+
+    def release(self, a: Action, who: str) -> None:
+        """The button was let go: ends what a hold action started."""
+        if a.type in HOLD_ACTIONS and plugins.handles(a.type):
+            plugins.release(a.type, a.target.strip())
 
     def _after_mute(self, what: str) -> None:
         self._audio_changed()

@@ -279,6 +279,8 @@ class DesktopController(QObject):
                 self.set_profile(name, idx - 1)
             else:
                 self.runner.press(c.action, who)
+        elif kind == "release":
+            self.runner.release(c.action, who)
         elif kind == "level":
             raw = addr[3]
             self.runner.level((name, idx, i), c.action, float(value), raw, who)
@@ -387,10 +389,16 @@ class DesktopController(QObject):
 
     def _pad_event(self, kind: str, channel: int, number: int, pressed: bool) -> None:
         hit = self._resolve(kind, channel, number)
-        if hit is None or self.paused:
+        if hit is None:
             return
         slot, i = hit
-        if not self.cfg.actions(slot).active():
+        active = self.cfg.actions(slot).active()
+        if not pressed and active:
+            # Let go even if Chimp was paused meanwhile, so a hold action can't stay on.
+            self.runner.release(self.cfg.actions(slot).pads[i], f"Pad {i + 1}")
+        if self.paused:
+            return
+        if not active:
             if pressed:
                 self._maybe_hint()
             return

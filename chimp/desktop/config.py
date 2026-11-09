@@ -70,7 +70,11 @@ PAD_ACTIONS: dict[str, tuple[str, str, str]] = {
     "obs_record": ("OBS: toggle recording", "", ""),
     "obs_stream": ("OBS: toggle streaming", "", ""),
     "obs_mute": ("OBS: toggle source mute", "Source", "audio source name, e.g. Mic/Aux"),
+    "marker": ("Add marker", "Note", "optional, e.g. retake (saved with the time, for cutting later)"),
 }
+
+# Pad actions that also act when the pad is let go (the pad must be momentary).
+HOLD_ACTIONS: set[str] = set()
 
 # Buttons on generic devices can also flip between that device's profiles.
 BUTTON_ACTIONS: dict[str, tuple[str, str, str]] = {
@@ -219,7 +223,7 @@ class Control:
         act = d.get("action") if isinstance(d.get("action"), dict) else {}
         a = Action(str(act.get("type", "none")), str(act.get("target", "")))
         valid = BUTTON_ACTIONS if c.kind == "button" else KNOB_ACTIONS
-        c.action = a if a.type in valid else Action()
+        c.action = a if a.type in valid or (c.kind == "button" and _plugin_shaped(a.type)) else Action()
         c.group = str(d.get("group", ""))[:40]
         return c
 
@@ -269,13 +273,19 @@ def _default_programs() -> dict[int, ProgramActions]:
     return progs
 
 
+def _plugin_shaped(t: str) -> bool:
+    """An action type that could be a plugin's whose plugin isn't here right now: kept
+    (it does nothing) so that saving the config doesn't wipe the pad."""
+    return t.isidentifier() and t not in KNOB_ACTIONS
+
+
 def _parse_actions(items, n: int, valid: dict, fallback) -> list[Action]:
     if not isinstance(items, list):
         return fallback()
     out = []
     for it in items[:n]:
         a = Action(str(it.get("type", "none")), str(it.get("target", ""))) if isinstance(it, dict) else Action()
-        out.append(a if a.type in valid else Action())
+        out.append(a if a.type in valid or _plugin_shaped(a.type) else Action())
     return out + [Action() for _ in range(n - len(out))]
 
 
@@ -297,13 +307,13 @@ class DesktopConfig:
         return [s for s, pa in sorted(self.programs.items()) if pa.active()]
 
     def uses_obs(self) -> bool:
-        lpd8 = any(a.type.startswith("obs_") for pa in self.programs.values() for a in pa.pads)
-        generic = any(
-            c.action.type.startswith("obs_")
-            for d in self.devices.values()
-            for prof in d.profiles
-            for c in prof.controls
-        )
+        """Any OBS action, or a marker (which notes the time in OBS's recording)."""
+
+        def obs(t: str) -> bool:
+            return t.startswith("obs_") or t == "marker"
+
+        lpd8 = any(obs(a.type) for pa in self.programs.values() for a in pa.pads)
+        generic = any(obs(c.action.type) for d in self.devices.values() for prof in d.profiles for c in prof.controls)
         return lpd8 or generic
 
     def obs_inputs(self) -> set[str]:
@@ -409,4 +419,22 @@ ON_COLOURS = {
     "obs_mute": (255, 80, 0),
     "obs_scene": (0, 255, 0),
     "media": (0, 255, 120),
+    "marker": (255, 160, 0),
 }
+
+
+def register_plugins() -> None:
+    """Your plugins' pad actions (plugins.py), read from their source: nothing runs here."""
+    from . import plugins
+
+    builtin = set(PAD_ACTIONS) | set(BUTTON_ACTIONS) | set(KNOB_ACTIONS)
+    for plugin in plugins.discover(builtin).values():
+        for aid, pa in plugin.actions.items():
+            PAD_ACTIONS[aid] = BUTTON_ACTIONS[aid] = (pa.label, pa.field, pa.hint)
+            if pa.hold:
+                HOLD_ACTIONS.add(aid)
+            if pa.colour:
+                ON_COLOURS[aid] = pa.colour
+
+
+register_plugins()

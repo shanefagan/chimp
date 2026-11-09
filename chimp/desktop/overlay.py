@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
+from . import plugins
 from .config import Action
 
 QML = Path(__file__).resolve().parents[1] / "qml" / "Overlay.qml"
@@ -31,7 +32,7 @@ MEDIA_LABELS = {
 def short_label(a: Action) -> str:
     """A few words for an action, to fit on a pad or under a knob."""
     t = a.target.strip()
-    return {
+    label = {
         "none": "",
         "master_volume": "Master",
         "mic_volume": "Mic",
@@ -50,9 +51,16 @@ def short_label(a: Action) -> str:
         "obs_record": "OBS record",
         "obs_stream": "OBS stream",
         "obs_mute": f"OBS mute {t}".strip(),
+        "marker": f"Marker: {t}" if t else "Marker",
         "profile_next": "Next profile",
         "profile_prev": "Prev profile",
-    }.get(a.type, a.type)
+    }.get(a.type)
+    return label if label is not None else _plugin_short(a.type)
+
+
+def _plugin_short(t: str) -> str:
+    pa = plugins.actions().get(t)
+    return pa.short if pa else t
 
 
 def _hex(rgb) -> str:
