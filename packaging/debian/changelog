@@ -1,3 +1,10 @@
+chimp (0.8.0-1) unstable; urgency=medium
+
+  * Markers; plugins for your own pad actions; pads and buttons have a
+    release
+
+ -- Shane Fagan <mail@shanefagan.com>  Mon, 09 Nov 2026 22:38:29 +0000
+
 chimp (0.7.2-1) unstable; urgency=medium
 
   * Game volume works for Proton games that play straight to PipeWire;
