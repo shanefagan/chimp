@@ -137,9 +137,8 @@ class ObsClient(QObject):
             self._refresh_inputs()
         elif op == 5:  # Event
             self._on_event(d.get("eventType", ""), d.get("eventData") or {})
-        elif op == 7:  # RequestResponse
-            if (d.get("requestStatus") or {}).get("result"):
-                self._on_response(d.get("requestType", ""), d.get("responseData") or {}, d.get("requestId", ""))
+        elif op == 7 and (d.get("requestStatus") or {}).get("result"):  # RequestResponse, succeeded
+            self._on_response(d.get("requestType", ""), d.get("responseData") or {}, d.get("requestId", ""))
 
     def _refresh_inputs(self) -> None:
         for name in self.watch_inputs:
