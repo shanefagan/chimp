@@ -36,7 +36,7 @@ chimp-loop = "chimp.loop.app:main"
 chimpd = "chimp.desktop.service:main"
 
 [dependency-groups]
-dev = ["pytest>=9.2.0", "ruff>=0.17.3", "bandit>=1.9.4", "pulsectl>=24.12.0"]
+dev = ["pytest>=9.2.0", "ruff>=0.17.4", "bandit>=1.9.4", "pulsectl>=24.12.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["chimp"]
