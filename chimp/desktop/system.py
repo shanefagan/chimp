@@ -154,6 +154,13 @@ def audio_streams(max_age: float = 2.0) -> list[dict]:
         objs = json.loads(run(["pw-dump"], timeout=2.0) or "[]")
     except ValueError:
         objs = []
+    # Native PipeWire clients (e.g. Proton's PipeWire backend) put process.id and
+    # process.binary on the PipeWire:Interface:Client object, not on the stream Node.
+    clients: dict[int, dict] = {
+        o["id"]: (o.get("info") or {}).get("props") or {}
+        for o in objs
+        if o.get("type") == "PipeWire:Interface:Client" and isinstance(o.get("id"), int)
+    }
     for o in objs:
         props = (o.get("info") or {}).get("props") or {}
         if props.get("media.class") != "Stream/Output/Audio":
@@ -161,15 +168,22 @@ def audio_streams(max_age: float = 2.0) -> list[dict]:
         # Filter chains (HeSuVi, EasyEffects...) also create output streams; they aren't apps.
         if not (props.get("application.name") or props.get("application.process.binary")):
             continue
+        cprops = clients.get(props.get("client.id")) or {}
+        raw_pid = (
+            props.get("application.process.id")
+            or cprops.get("application.process.id")
+            or cprops.get("pipewire.sec.pid")
+            or 0
+        )
         try:
-            pid = int(props.get("application.process.id") or 0)
+            pid = int(raw_pid)
         except (TypeError, ValueError):
             pid = 0
         streams.append(
             {
                 "id": o.get("id"),
-                "name": props.get("application.name") or props.get("node.name") or "",
-                "binary": props.get("application.process.binary") or "",
+                "name": props.get("application.name") or cprops.get("application.name") or props.get("node.name") or "",
+                "binary": props.get("application.process.binary") or cprops.get("application.process.binary") or "",
                 "node": props.get("node.name") or "",
                 "pid": pid,
                 "running": (o.get("info") or {}).get("state") == "running",
@@ -200,18 +214,20 @@ def _ancestors(pid: int, depth: int = 12) -> list[int]:
     return out
 
 
-_game_cache: dict[int, bool] = {}
+_game_cache: dict[int, tuple[str, bool]] = {}  # pid -> (its start time, game?)
 _GAME_MARKERS = (b"wine", b"proton", b".exe", b"steamapps/common")
 
 
 def looks_like_game(pid: int, app_class: str = "") -> bool:
     """Is this window's process a game? Steam/Proton/Wine/gamescope say so; a fullscreen
-    browser or video player doesn't. Cached per pid while the process stays alive."""
+    browser or video player doesn't. Cached per process: a pid the kernel has since
+    reused for another process (different start time) is looked at afresh."""
     if pid <= 0:
         return False
+    started = _start_time(pid)
     cached = _game_cache.get(pid)
-    if cached is not None and pid_alive(pid):
-        return cached
+    if cached is not None and started and cached[0] == started:
+        return cached[1]
     cls = app_class.lower()
     result = cls.startswith("steam_app_") or cls == "gamescope"
     if not result:
@@ -226,8 +242,22 @@ def looks_like_game(pid: int, app_class: str = "") -> bool:
             result = any(m in cmd for m in _GAME_MARKERS)
         except OSError:
             pass
-    _game_cache[pid] = result
+    if started:  # a process that's gone can't be cached against pid reuse
+        if len(_game_cache) > 256:
+            for old in [p for p in _game_cache if not pid_alive(p)]:
+                del _game_cache[old]
+        _game_cache[pid] = (started, result)
     return result
+
+
+def _start_time(pid: int) -> str:
+    """When the process started (clock ticks since boot, /proc/<pid>/stat field 22), or ""."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return ""
+    fields = stat[stat.rfind(")") + 2 :].split()  # the name can hold spaces and brackets
+    return fields[19] if len(fields) > 19 else ""
 
 
 def proc_name(pid: int) -> str:
@@ -244,13 +274,15 @@ def pid_alive(pid: int) -> bool:
 _STEAM_ID_KEYS = (b"SteamAppId=", b"SteamGameId=", b"STEAM_COMPAT_APP_ID=")
 
 
-def steam_app_id(pid: int, app_class: str = "") -> str:
+def class_app_id(app_class: str) -> str:
+    """The Steam app id in a window class: Proton games' windows are `steam_app_<id>`."""
+    m = re.fullmatch(r"steam_app_(\d+)", app_class.strip().lower())
+    return m.group(1) if m else ""
+
+
+def steam_app_id(pid: int) -> str:
     """The Steam app id a process was launched with ("" if none). Every process of a
     Proton game has it, whichever of them owns the window, the network or the audio."""
-    if app_class:
-        m = re.search(r"steam_app_(\d+)", app_class.lower())
-        if m:
-            return m.group(1)
     try:
         env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
     except OSError:
@@ -277,10 +309,9 @@ def streams_for_pid(pid: int, app_class: str = "") -> list[dict]:
     kids = [s for s in streams if s["pid"] and pid in _ancestors(s["pid"])]
     if kids:
         return kids
-    try:
-        app = steam_app_id(pid, app_class)
-    except TypeError:
-        app = steam_app_id(pid)
+    # The window's class names the game even when its process (a launcher or wrapper)
+    # wasn't started with SteamAppId in its environment.
+    app = class_app_id(app_class) or steam_app_id(pid)
     if app:
         same_app = [s for s in streams if s["pid"] and steam_app_id(s["pid"]) == app]
         if same_app:
@@ -317,7 +348,11 @@ def resolve_streams(a_type: str, target: str, targets: dict) -> tuple[list[dict]
         if not t:
             return [], ("No game running" if a_type == "game_volume" else "No focused app")
         streams = streams_for_pid(int(t["pid"]), app_class=str(t.get("name") or ""))
-        name = t.get("name") or (streams[0]["name"] if streams else "?")
+        raw_name = str(t.get("name") or "")
+        if streams and (not raw_name or raw_name.lower().startswith("steam_app_")):
+            name = streams[0]["name"].removesuffix(".exe") or raw_name
+        else:
+            name = raw_name or (streams[0]["name"] if streams else "?")
         return streams, (name if streams else f"{name} (no sound)")
     if a_type == "playing_volume":
         try:
