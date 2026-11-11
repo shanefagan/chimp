@@ -17,7 +17,7 @@
 %global __requires_exclude ^python3(\\.[0-9]+)?dist\\(python-rtmidi\\)
 
 Name:           chimp
-Version:        0.9.0
+Version:        0.10.0
 Release:        1%{?dist}
 Summary:        MIDI controllers as a KDE Plasma control deck
 
@@ -141,6 +141,9 @@ export PYTHONPATH=%{buildroot}%{python3_sitelib}:%{buildroot}%{privdir}
 %{_mandir}/man1/chimp-loop.1*
 
 %changelog
+* Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.10.0-1
+- A soundboard: pads that play sound clips, each with its own mode, output and volume
+
 * Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.9.0-1
 - Controllers Chimp knows, set up in one click; Chimp Loop takes the shape of your controller
 
