@@ -1,0 +1,10 @@
+# The first Akai LPD8: the shape only (teach Chimp its controls with Learn).
+name: Akai LPD8
+match: [LPD8]
+about: Eight pads and eight knobs, in four programs. Use Learn for what they send.
+pads:
+  columns: 4
+  rows: 2
+  first: bottom-left
+  banks: 4
+  word: Program

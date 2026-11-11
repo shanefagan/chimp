@@ -69,6 +69,8 @@ def main() -> int:
     ctl.start()
     if os.environ.get("CHIMP_LOOP_OPEN"):  # dev aid: open a saved loop
         ctl.loadLoop(os.environ["CHIMP_LOOP_OPEN"])
+    if os.environ.get("CHIMP_LOOP_PAGE"):  # dev aid: the page of pads to show ("1", "fx")
+        ctl.setViewPage(os.environ["CHIMP_LOOP_PAGE"])
     if os.environ.get("CHIMP_LOOP_VIEW"):  # dev aid: "pads" or "steps"
         qml.rootObjects()[0].setProperty("view", os.environ["CHIMP_LOOP_VIEW"])
     signal.signal(signal.SIGINT, lambda *_: app.quit())

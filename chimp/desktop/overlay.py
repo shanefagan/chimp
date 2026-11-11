@@ -67,6 +67,9 @@ def _hex(rgb) -> str:
     return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
+MAX_ITEMS = 24  # controls drawn for one group of a generic device
+
+
 class OverlayModel(QObject):
     changed = Signal()
 
@@ -227,7 +230,7 @@ class OverlayModel(QObject):
         prog = ctl.programs.get(slot)
         self._layout = "lpd8"
         self._title = "LPD8 mk2"
-        self._subtitle = f"Program {slot}" + ("" if acts.active() else " · MIDI only")
+        self._subtitle = f"Program {slot}" + ("" if acts.active() else " · " + ctl.program_use(slot))
         items = []
         for i, a in enumerate(acts.knobs):
             key = ("lpd8", slot, i)
@@ -268,16 +271,22 @@ class OverlayModel(QObject):
             self._items = []
             return
         profile = dev.profiles[min(prof, len(dev.profiles) - 1)]
-        from .templates import overlay_columns
+        from .templates import pad_grid
 
         self._layout = "grid"
-        self._columns = overlay_columns(name)
         self._title = name
         self._subtitle = profile.name + (f" · {group}" if group else "")
+        shown = [(i, c) for i, c in enumerate(profile.controls) if (c.group or "") == (group or "")]
+        self._columns, bottom_up = pad_grid(name, group or "", len(shown))
+        if self._columns and bottom_up:  # pad 1 is bottom-left on the hardware: draw it there
+            rows = [shown[r : r + self._columns] for r in range(0, len(shown), self._columns)]
+            shown = [x for row in reversed(rows) for x in row]
+        if len(shown) > MAX_ITEMS:
+            # too many to draw (an 8 by 8 grid): the ones that do something, and the one touched
+            keep = [x for x in shown if x[1].action.type != "none" or self._is_pressed((name, prof, x[0]))]
+            shown, self._columns = keep[:MAX_ITEMS], 0
         items = []
-        for i, c in enumerate(profile.controls):
-            if (c.group or "") != (group or ""):
-                continue
+        for i, c in shown:
             key = (name, prof, i)
             text, frac = self._value_text(key)
             items.append(
@@ -294,6 +303,4 @@ class OverlayModel(QObject):
                     "onColor": "#3d8bff",
                 }
             )
-            if len(items) >= 24:
-                break
         self._items = items

@@ -56,11 +56,14 @@ MASTER_CHOICES: dict[str, tuple[str, object, tuple]] = {
     "reverb_mode": ("Reverb", "hall", tuple(m for m, _ in REVERB_MODES)),
     "comp_speed": ("Compressor", "slow", ("slow", "fast")),
 }
-# What the LPD8's eight knobs (CC 70-77) turn, page by page.
+# What a controller's eight knobs turn, page by page: between them, every dial.
 KNOB_PAGES: dict[str, list[str]] = {
     "pad": ["p.level", "p.pitch", "p.attack", "p.decay", "p.cutoff", "p.resonance", "p.drive", "p.reverb"],
+    "pad2": ["p.pan", "p.sustain", "p.punch", "p.delay"],
     "master": ["m.filter", "m.resonance", "m.drive", "m.delay", "m.echoes", "m.reverb", "m.size", "m.comp"],
+    "master2": ["m.tone", "m.shimmer", "m.limit", "m.swing", "m.volume"],
 }
+KNOB_PAGE_LABELS = {"pad": "Pad", "pad2": "Pad 2", "master": "Master", "master2": "Master 2"}
 # Starting points for the master section (pads are left as they are).
 PRESETS: dict[str, dict] = {
     "Clean": {},
@@ -331,9 +334,10 @@ class Engine:
         else:
             self.set_master(key, value)
 
-    def knob_target(self, k: int) -> str:
-        """What LPD8 knob k (0-7) turns on the current page."""
-        return KNOB_PAGES[self.knob_page][k]
+    def knob_target(self, k: int) -> str | None:
+        """What knob k (0-7) turns on the current page (None: nothing on this page)."""
+        page = KNOB_PAGES[self.knob_page]
+        return page[k] if 0 <= k < len(page) else None
 
     def sound_settings(self) -> dict:
         """Everything about how the loop sounds, besides its hits (saved with it)."""

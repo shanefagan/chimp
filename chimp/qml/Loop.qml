@@ -15,8 +15,21 @@ Kirigami.ApplicationWindow {
     minimumHeight: Kirigami.Units.gridUnit * 44
     title: "Chimp Loop"
 
-    // Keys laid out like the pads: sound 1 bottom-left, 16 top-right.
-    readonly property var padKeys: ["Z", "X", "C", "V", "A", "S", "D", "F", "Q", "W", "E", "R", "1", "2", "3", "4"]
+    // Keys laid out like the pads on screen: Z X C V along the bottom row, then A S D F,
+    // Q W E R and 1 2 3 4 for as many rows as there are (the first four pads of each).
+    readonly property var keyRows: ["ZXCV", "ASDF", "QWER", "1234"]
+    function cellKey(i) {
+        const fromBottom = loop.padRows - 1 - Math.floor(i / loop.padColumns), col = i % loop.padColumns
+        return fromBottom < 4 && col < 4 ? keyRows[fromBottom][col] : ""
+    }
+    function cellForKey(k) {
+        if (k === "") return null
+        const cells = loop.padCells
+        for (let i = 0; i < cells.length; i++)
+            if (cellKey(i) === k && (cells[i].sound >= 0 || cells[i].fx !== "")) return cells[i]
+        return null
+    }
+    property var keysDown: ({})  // key -> the pad it pressed (the page may change before it's let go)
     function soundColor(i) { return Qt.hsla(i / 16, 0.62, 0.55, 1) }
     function stateText(s) {
         return { empty: "Ready", recording: "Recording", playing: "Playing", overdub: "Overdubbing", stopped: "Stopped" }[s] || s
@@ -165,9 +178,12 @@ Kirigami.ApplicationWindow {
             Keys.onPressed: (event) => {
                 if (event.isAutoRepeat) { event.accepted = true; return }
                 const k = root.keyName(event)
-                const pad = root.padKeys.indexOf(k)
-                if (pad >= 0 && !(event.modifiers & Qt.MetaModifier)) {
-                    loop.padDown(pad, root.how(event.modifiers)); event.accepted = true
+                const cell = (event.modifiers & Qt.MetaModifier) ? null : root.cellForKey(k)
+                if (cell) {
+                    root.keysDown[k] = cell
+                    if (cell.fx !== "") loop.holdDown(cell.fx)
+                    else loop.padDown(cell.sound, root.how(event.modifiers))
+                    event.accepted = true
                 } else if (root.holdKeys[k] !== undefined) {
                     loop.holdDown(root.holdKeys[k]); event.accepted = true
                 }
@@ -175,9 +191,13 @@ Kirigami.ApplicationWindow {
             Keys.onReleased: (event) => {
                 if (event.isAutoRepeat) { event.accepted = true; return }
                 const k = root.keyName(event)
-                const pad = root.padKeys.indexOf(k)
-                if (pad >= 0) { loop.padUp(pad); event.accepted = true }
-                else if (root.holdKeys[k] !== undefined) { loop.holdUp(root.holdKeys[k]); event.accepted = true }
+                const cell = root.keysDown[k]
+                if (cell) {
+                    delete root.keysDown[k]
+                    if (cell.fx !== "") loop.holdUp(cell.fx)
+                    else loop.padUp(cell.sound)
+                    event.accepted = true
+                } else if (root.holdKeys[k] !== undefined) { loop.holdUp(root.holdKeys[k]); event.accepted = true }
             }
         }
 
@@ -411,6 +431,73 @@ Kirigami.ApplicationWindow {
                     Item { Layout.fillWidth: true }
                 }
 
+                // pages: the pads on screen are the controller's, a page of the kit at a time
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+                    QQC2.Label { text: "Pads"; opacity: 0.7; visible: loop.pageTabs.length > 0 }
+                    Repeater {
+                        model: loop.pageTabs
+                        delegate: QQC2.Button {
+                            required property var modelData
+                            focusPolicy: Qt.NoFocus
+                            checkable: true
+                            checked: loop.viewPage === modelData.id
+                            flat: !checked
+                            font.bold: checked
+                            text: modelData.label + " · " + modelData.detail + (modelData.here ? "  ●" : "")
+                            onClicked: { loop.setViewPage(modelData.id); keyCatcher.forceActiveFocus() }
+                            QQC2.ToolTip.text: modelData.here ? "Your controller is on this page" : "Look at this page (your controller stays on its own)"
+                            QQC2.ToolTip.visible: hovered
+                        }
+                    }
+                    QQC2.Label {
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        visible: loop.handNote !== ""
+                        text: loop.handNote
+                        font.bold: true
+                    }
+                    Repeater {  // what each LPD8 program does here; the one it's on stands out
+                        model: loop.lpd8Programs
+                        delegate: Rectangle {
+                            required property var modelData
+                            readonly property bool desktop: modelData.text === "desktop"
+                            implicitWidth: chip.implicitWidth + Kirigami.Units.smallSpacing * 3
+                            implicitHeight: chip.implicitHeight + Kirigami.Units.smallSpacing
+                            radius: height / 2
+                            color: modelData.here ? (desktop ? Kirigami.Theme.neutralBackgroundColor : Kirigami.Theme.highlightColor)
+                                                  : "transparent"
+                            border.width: 1
+                            border.color: modelData.here ? "transparent" : Qt.alpha(Kirigami.Theme.textColor, 0.25)
+                            opacity: modelData.here ? 1 : 0.7
+                            QQC2.Label {
+                                id: chip
+                                anchors.centerIn: parent
+                                font: Kirigami.Theme.smallFont
+                                color: modelData.here && !parent.desktop ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                                text: "<b>" + modelData.program + "</b> " + modelData.text
+                                textFormat: Text.StyledText
+                            }
+                            QQC2.ToolTip.text: "LPD8 Program " + modelData.program + ": " + (desktop ? "desktop control (not the looper's)" : modelData.text)
+                                               + (modelData.here ? ". The LPD8 is on this one." : ". Hold PROGRAM + pad " + modelData.program + " to switch to it.")
+                            QQC2.ToolTip.visible: chipHover.hovered
+                            HoverHandler { id: chipHover }
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    QQC2.Label { text: "Show"; opacity: 0.7 }
+                    QQC2.ComboBox {
+                        focusPolicy: Qt.NoFocus
+                        implicitWidth: Kirigami.Units.gridUnit * 9
+                        readonly property var sizes: [0, 8, 12, 16]
+                        model: ["Controller's pads", "8 pads", "12 pads", "16 pads"]
+                        currentIndex: Math.max(0, sizes.indexOf(loop.padsShown))
+                        onActivated: (i) => loop.setPadsShown(sizes[i])
+                        QQC2.ToolTip.text: "How many pads to show at once: as many as the controller you're playing has, or a number you pick"
+                        QQC2.ToolTip.visible: hovered
+                    }
+                }
+
                 Kirigami.InlineMessage {
                     Layout.fillWidth: true
                     visible: loop.assigning !== ""
@@ -421,7 +508,7 @@ Kirigami.ApplicationWindow {
                     actions: [ Kirigami.Action { text: "Cancel"; onTriggered: loop.assign("") } ]
                 }
 
-                // --- step sequencer: 16 parts x 16 steps (a bar per page) ---------------
+                // --- step sequencer: the page's parts x 16 steps (a bar per page) --------
                 Rectangle {
                     visible: root.view === "steps"
                     Layout.fillWidth: true
@@ -475,11 +562,11 @@ Kirigami.ApplicationWindow {
                         }
 
                         Repeater {
-                            model: 16
+                            model: loop.stepSounds
                             delegate: RowLayout {
                                 id: row
-                                required property int index
-                                readonly property int sound: index
+                                required property int modelData
+                                readonly property int sound: modelData
                                 readonly property color tint: root.soundColor(sound)
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
@@ -574,17 +661,21 @@ Kirigami.ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: Kirigami.Units.gridUnit * 16
-                    columns: 4
+                    columns: loop.padColumns
                     rowSpacing: Kirigami.Units.smallSpacing * 2
                     columnSpacing: Kirigami.Units.smallSpacing * 2
                     Repeater {
                         id: bigPads
-                        model: 16
+                        model: loop.padCells
                         delegate: Rectangle {
                             id: bp
                             required property int index
-                            readonly property int sound: (3 - Math.floor(index / 4)) * 4 + index % 4
-                            readonly property color base: root.soundColor(sound)
+                            required property var modelData
+                            readonly property int sound: modelData.sound
+                            readonly property string fx: modelData.fx  // an FX pad: roll or a glitch, held
+                            readonly property bool gap: sound < 0 && fx === ""
+                            readonly property bool fxHeld: fx !== "" && loop.held.indexOf(fx) >= 0
+                            readonly property color base: fx !== "" ? Kirigami.Theme.highlightColor : root.soundColor(Math.max(0, sound))
                             readonly property bool isMuted: loop.muted.indexOf(sound) >= 0
                             readonly property bool isSoloed: loop.soloed.indexOf(sound) >= 0
                             property real glow: 0
@@ -595,22 +686,26 @@ Kirigami.ApplicationWindow {
                             Layout.preferredWidth: 10
                             Layout.preferredHeight: 10
                             radius: Kirigami.Units.cornerRadius * 2
-                            opacity: isMuted || (loop.soloed.length > 0 && !isSoloed) ? 0.45 : 1
-                            color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, glow))
-                            border.width: loop.selectedSound === sound ? 3 : 1
-                            border.color: loop.selectedSound === sound ? Qt.lighter(base, 1.6) : Qt.alpha(base, 0.7)
+                            enabled: !gap
+                            opacity: gap ? 0 : fx === "" && (isMuted || (loop.soloed.length > 0 && !isSoloed)) ? 0.45 : 1
+                            color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, fxHeld ? 0.8 : glow))
+                            border.width: fx === "" && loop.selectedSound === sound ? 3 : 1
+                            border.color: fx === "" && loop.selectedSound === sound ? Qt.lighter(base, 1.6) : Qt.alpha(base, 0.7)
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 onPressed: (mouse) => {
                                     keyCatcher.forceActiveFocus()
-                                    if (mouse.button === Qt.RightButton) loop.padDown(bp.sound, "select")
+                                    if (bp.fx !== "") loop.holdDown(bp.fx)
+                                    else if (mouse.button === Qt.RightButton) loop.padDown(bp.sound, "select")
                                     else loop.padDown(bp.sound, root.how(mouse.modifiers))
                                 }
-                                onReleased: loop.padUp(bp.sound)
+                                onReleased: bp.fx !== "" ? loop.holdUp(bp.fx) : loop.padUp(bp.sound)
+                                onCanceled: if (bp.fx !== "") loop.holdUp(bp.fx)
                             }
                             DropArea {
                                 id: bpDrop
+                                enabled: bp.fx === ""
                                 anchors.fill: parent
                                 onDropped: (drop) => { loop.droppedOnPad(bp.sound, drop.urls); drop.accept() }
                             }
@@ -626,24 +721,26 @@ Kirigami.ApplicationWindow {
                                 anchors.fill: parent
                                 anchors.margins: Kirigami.Units.smallSpacing * 2
                                 RowLayout {
-                                    QQC2.Label { text: bp.sound + 1; font.bold: true; opacity: 0.7 }
+                                    QQC2.Label { text: bp.fx !== "" ? "FX" : bp.sound + 1; font.bold: true; opacity: 0.7 }
                                     Item { Layout.fillWidth: true }
-                                    QQC2.Label { text: root.padKeys[bp.sound]; opacity: 0.5; font.family: "monospace" }
+                                    QQC2.Label { text: root.cellKey(bp.index); opacity: 0.5; font.family: "monospace" }
                                 }
                                 Item { Layout.fillHeight: true }
                                 RowLayout {
                                     Kirigami.Heading {
                                         Layout.fillWidth: true
                                         level: 2
-                                        text: loop.padLabels[bp.sound] || "—"
+                                        text: bp.fx !== "" ? bp.modelData.label : (loop.padLabels[bp.sound] || "—")
                                         elide: Text.ElideRight
                                     }
                                     QQC2.ToolButton {
+                                        visible: bp.fx === ""
                                         focusPolicy: Qt.NoFocus
                                         text: "M"; checkable: true; checked: bp.isMuted
                                         onClicked: loop.toggleMute(bp.sound)
                                     }
                                     QQC2.ToolButton {
+                                        visible: bp.fx === ""
                                         focusPolicy: Qt.NoFocus
                                         text: "S"; checkable: true; checked: bp.isSoloed
                                         onClicked: loop.toggleSolo(bp.sound)
@@ -666,7 +763,7 @@ Kirigami.ApplicationWindow {
                     GridLayout {
                         id: pads
                         visible: root.view === "steps"
-                        columns: 4
+                        columns: loop.padColumns
                         rowSpacing: 4
                         columnSpacing: 4
                         Layout.fillHeight: true
@@ -685,11 +782,17 @@ Kirigami.ApplicationWindow {
 
                         Repeater {
                             id: padRepeater
-                            model: 16
+                            model: loop.padCells
                             delegate: Rectangle {
                                 id: pad
                                 required property int index
-                                readonly property int sound: (3 - Math.floor(index / 4)) * 4 + index % 4
+                                required property var modelData
+                                readonly property int sound: modelData.sound
+                                readonly property string fx: modelData.fx
+                                readonly property bool gap: sound < 0 && fx === ""
+                                readonly property bool fxHeld: fx !== "" && loop.held.indexOf(fx) >= 0
+                                enabled: !gap
+                                opacity: gap ? 0 : 1
                                 property real glow: 0
                                 function flash(vel) { glow = 0.35 + 0.65 * vel; fade.restart() }
                                 NumberAnimation { id: fade; target: pad; property: "glow"; to: 0; duration: 260; easing.type: Easing.OutQuad }
@@ -699,9 +802,9 @@ Kirigami.ApplicationWindow {
                                 Layout.preferredWidth: 10
                                 Layout.preferredHeight: 10
                                 radius: Kirigami.Units.cornerRadius * 1.5
-                                readonly property color base: root.soundColor(sound)
-                                readonly property bool chosen: loop.selectedSound === sound
-                                color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, glow))
+                                readonly property color base: fx !== "" ? Kirigami.Theme.highlightColor : root.soundColor(Math.max(0, sound))
+                                readonly property bool chosen: fx === "" && loop.selectedSound === sound
+                                color: Qt.tint(Qt.alpha(base, 0.22), Qt.alpha(base, fxHeld ? 0.8 : glow))
                                 border.width: loop.assigning === "sound:" + sound ? 3 : chosen ? 2 : 1
                                 border.color: loop.assigning === "sound:" + sound ? Kirigami.Theme.highlightColor
                                             : chosen ? Qt.lighter(base, 1.5) : Qt.alpha(base, 0.7)
@@ -711,14 +814,14 @@ Kirigami.ApplicationWindow {
                                     anchors.margins: 5
                                     spacing: 0
                                     RowLayout {
-                                        QQC2.Label { text: (pad.sound + 1); font.bold: true; opacity: 0.7; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                                        QQC2.Label { text: pad.fx !== "" ? "FX" : (pad.sound + 1); font.bold: true; opacity: 0.7; font.pointSize: Kirigami.Theme.smallFont.pointSize }
                                         Item { Layout.fillWidth: true }
-                                        QQC2.Label { text: root.padKeys[pad.sound]; opacity: 0.5; font.family: "monospace"; font.pointSize: Kirigami.Theme.smallFont.pointSize }
+                                        QQC2.Label { text: root.cellKey(pad.index); opacity: 0.5; font.family: "monospace"; font.pointSize: Kirigami.Theme.smallFont.pointSize }
                                     }
                                     Item { Layout.fillHeight: true }
                                     QQC2.Label {
                                         Layout.fillWidth: true
-                                        text: loop.padLabels[pad.sound] || "—"
+                                        text: pad.fx !== "" ? pad.modelData.label : (loop.padLabels[pad.sound] || "—")
                                         font.bold: true
                                         elide: Text.ElideRight
                                     }
@@ -728,14 +831,17 @@ Kirigami.ApplicationWindow {
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     onPressed: (mouse) => {
                                         keyCatcher.forceActiveFocus()
-                                        if (pads.assignMode) loop.assign("sound:" + pad.sound)
+                                        if (pad.fx !== "") loop.holdDown(pad.fx)
+                                        else if (pads.assignMode) loop.assign("sound:" + pad.sound)
                                         else if (mouse.button === Qt.RightButton) loop.padDown(pad.sound, "select")
                                         else loop.padDown(pad.sound, root.how(mouse.modifiers))
                                     }
-                                    onReleased: loop.padUp(pad.sound)
+                                    onReleased: pad.fx !== "" ? loop.holdUp(pad.fx) : loop.padUp(pad.sound)
+                                    onCanceled: if (pad.fx !== "") loop.holdUp(pad.fx)
                                 }
                                 DropArea {
                                     id: padDrop
+                                    enabled: pad.fx === ""
                                     anchors.fill: parent
                                     onDropped: (drop) => { loop.droppedOnPad(pad.sound, drop.urls); drop.accept() }
                                 }
@@ -994,22 +1100,22 @@ Kirigami.ApplicationWindow {
                     }
 
                     Kirigami.Separator { Layout.fillWidth: true }
+                    QQC2.Label { text: "Knobs 1–" + loop.knobCount + " turn:" }
                     RowLayout {
                         Layout.fillWidth: true
-                        QQC2.Label { text: "LPD8 knobs 1–8:"; Layout.fillWidth: true }
-                        QQC2.Button {
-                            focusPolicy: Qt.NoFocus
-                            text: "Pad"
-                            checkable: true
-                            checked: loop.knobPage === "pad"
-                            onClicked: loop.setKnobPage("pad")
-                        }
-                        QQC2.Button {
-                            focusPolicy: Qt.NoFocus
-                            text: "Master"
-                            checkable: true
-                            checked: loop.knobPage === "master"
-                            onClicked: loop.setKnobPage("master")
+                        Repeater {
+                            model: loop.knobPages
+                            delegate: QQC2.Button {
+                                required property var modelData
+                                focusPolicy: Qt.NoFocus
+                                Layout.fillWidth: true
+                                text: modelData.label
+                                checkable: true
+                                checked: loop.knobPage === modelData.id
+                                flat: !checked
+                                font.bold: checked
+                                onClicked: loop.setKnobPage(modelData.id)
+                            }
                         }
                     }
                     QQC2.Label {
@@ -1017,7 +1123,7 @@ Kirigami.ApplicationWindow {
                         wrapMode: Text.Wrap
                         opacity: 0.6
                         font: Kirigami.Theme.smallFont
-                        text: "The numbered dials are on the knobs (CC 70–77). K, or a button assigned to “Knobs: pad / master”, switches page. Pad knobs act on the selected part, which only changes when you choose it (playing pads doesn't move it)."
+                        text: "Your controller's knobs turn the numbered dials: a page of them at a time, so every dial can be reached. K, or a button assigned to “Knobs: next page”, moves on. Pad pages act on the selected part, which only changes when you choose it (playing pads doesn't move it)."
                     }
 
                     Kirigami.Separator { Layout.fillWidth: true }

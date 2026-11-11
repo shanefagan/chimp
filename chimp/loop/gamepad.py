@@ -5,7 +5,7 @@ mapped to sticks and triggers in Wootility, so key depth becomes a knob).
 Reads evdev devices (python-evdev; optional: without it there are no gamepads) on one
 thread, hotplug-aware. Axes are 0-1 (sticks rest at 0.5, which is "off" for the DJ filter
 and "no change" for pitch: spring-loaded modulation). Calls `realtime(device, kind, key,
-value)` on its thread at once, and emits `event` for the Qt thread.
+value)` on its thread at once, and emits `inputEvent` for the Qt thread.
 """
 
 from __future__ import annotations
@@ -42,7 +42,8 @@ def _name(table: dict, code: int) -> str:
 
 
 class Gamepads(QObject):
-    event = Signal(str, str, str, float)  # device, kind ("value"/"press"/"release"), key, value
+    # (not `event`: that would hide QObject.event(), which Qt calls for every event)
+    inputEvent = Signal(str, str, str, float)  # device, kind ("value"/"press"/"release"), key, value
     devicesChanged = Signal()
 
     def __init__(self, realtime: Callable[[str, str, str, float], None], parent: QObject | None = None) -> None:
@@ -139,4 +140,4 @@ class Gamepads(QObject):
     def _fire(self, device: str, kind: str, key: str, value: float) -> None:
         with contextlib.suppress(Exception):  # never let an error kill the reader
             self._realtime(device, kind, key, value)
-        self.event.emit(device, kind, key, value)
+        self.inputEvent.emit(device, kind, key, value)

@@ -1,0 +1,15 @@
+# Arturia MiniLab mkII, factory memory 1. Knobs 1 and 9 are left out: they are endless
+# encoders that click, and send something else again when pushed. Pads 9-16 send CCs.
+name: Arturia MiniLab mkII
+match: [MiniLab mkII, Minilab mk2]
+about: Factory memory 1. Fourteen of the knobs and the pads (1 to 8 are notes, 9 to 16 CCs).
+pads:
+  columns: 8
+  rows: 1
+  first: bottom-left
+  channel: 10
+  banks: {"": 36}
+controls:
+  - {name: "Knob {n}", kind: knob, cc: [74, 71, 76, 77, 93, 73, 75], group: Knobs}
+  - {name: "Lower knob {n}", kind: knob, cc: [18, 19, 16, 17, 91, 79, 72], group: Knobs}
+  - {name: "Pad {n}", start: 9, kind: button, cc: 22-29, group: Pads 9-16}

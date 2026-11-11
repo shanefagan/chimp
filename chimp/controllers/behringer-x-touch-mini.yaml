@@ -1,0 +1,15 @@
+# Behringer X-Touch Mini, standard mode (not MC mode), channel 11. Layers A and B send
+# different numbers, so each layer's controls are their own. In standard mode the
+# encoders send a position (0-127), like knobs.
+name: Behringer X-Touch Mini
+match: [X-TOUCH MINI]
+about: Standard mode, channel 11. Eight encoders (turn and push), sixteen buttons and the fader, on layers A and B.
+controls:
+  - {name: "Encoder {n}", kind: knob, cc: 1-8, channel: 11, group: Layer A}
+  - {name: "Push {n}", kind: button, note: 0-7, channel: 11, group: Layer A}
+  - {name: "Button {n}", kind: button, note: 8-23, channel: 11, group: Layer A}
+  - {name: Fader, kind: fader, cc: 9, channel: 11, group: Layer A}
+  - {name: "B encoder {n}", kind: knob, cc: 11-18, channel: 11, group: Layer B}
+  - {name: "B push {n}", kind: button, note: 24-31, channel: 11, group: Layer B}
+  - {name: "B button {n}", kind: button, note: 32-47, channel: 11, group: Layer B}
+  - {name: B fader, kind: fader, cc: 10, channel: 11, group: Layer B}

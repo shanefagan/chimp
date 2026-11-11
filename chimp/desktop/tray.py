@@ -64,7 +64,7 @@ class Tray(QObject):
                 lines.append(f"LPD8 mk2: Program {ctl.active} · desktop control")
                 live = True
             else:
-                lines.append(f"LPD8 mk2: Program {ctl.active} · MIDI only")
+                lines.append(f"LPD8 mk2: Program {ctl.active} · {ctl.program_use(ctl.active)}")
         for name in ctl.generic_devices:
             dev = ctl.cfg.devices.get(name)
             if dev is None or not any(c.action.type != "none" for pr in dev.profiles for c in pr.controls):

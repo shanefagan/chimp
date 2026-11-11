@@ -320,13 +320,28 @@ class DesktopController(QObject):
             has = self.cfg.actions(slot).active()
             system.osd_text(
                 "input-keyboard-virtual" if has else "audio-midi",
-                f"LPD8: Program {slot}" + (" · desktop control" if has else " · MIDI only"),
+                f"LPD8: Program {slot} · " + self.program_use(slot),
             )
         self._announced = slot
         self._poll_audio()
         self._sync_obs_state()
         self._push_leds()
         self._write_status()
+
+    def program_use(self, slot: int) -> str:
+        """What an LPD8 program is doing right now: the desktop, Chimp Loop's pads while
+        that's open, or just MIDI."""
+        if self.cfg.actions(slot).active():
+            return "desktop control"
+        if self.looping:
+            from ..loop import programs
+
+            job = programs.lpd8_jobs(self.cfg.slots_with_actions(), programs.saved_jobs()).get(slot, "")
+            if job:
+                page = programs.job_page(job)
+                what = "roll and glitches" if job == programs.FX else f"sounds {page * 8 + 1}–{page * 8 + 8}"
+                return f"Chimp {programs.describe(job)}: {what}"
+        return "MIDI only"
 
     def _poll(self) -> None:
         if self.dev.connected:

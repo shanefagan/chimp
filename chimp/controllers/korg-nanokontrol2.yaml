@@ -1,0 +1,21 @@
+# Korg nanoKONTROL2, factory settings (CC mode, channel 1).
+name: Korg nanoKONTROL2
+match: [nanoKONTROL2]
+about: Factory settings, CC mode. Eight strips (knob, fader, S, M, R) and the transport.
+controls:
+  - {name: "Knob {n}", kind: knob, cc: 16-23, group: Knobs}
+  - {name: "Fader {n}", kind: fader, cc: 0-7, group: Faders}
+  - {name: "S{n}", kind: button, cc: 32-39, group: Solo}
+  - {name: "M{n}", kind: button, cc: 48-55, group: Mute}
+  - {name: "R{n}", kind: button, cc: 64-71, group: Rec}
+  - {name: Rewind, kind: button, cc: 43, group: Transport}
+  - {name: Forward, kind: button, cc: 44, group: Transport}
+  - {name: Stop, kind: button, cc: 42, group: Transport}
+  - {name: Play, kind: button, cc: 41, group: Transport}
+  - {name: Record, kind: button, cc: 45, group: Transport}
+  - {name: Cycle, kind: button, cc: 46, group: Transport}
+  - {name: Track ◀, kind: button, cc: 58, group: Transport}
+  - {name: Track ▶, kind: button, cc: 59, group: Transport}
+  - {name: Marker set, kind: button, cc: 60, group: Transport}
+  - {name: Marker ◀, kind: button, cc: 61, group: Transport}
+  - {name: Marker ▶, kind: button, cc: 62, group: Transport}

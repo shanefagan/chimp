@@ -1,0 +1,15 @@
+# Akai APC mini (the first one), channel 1. The grid counts up from the bottom-left.
+name: Akai APC mini
+match: [APC MINI]
+about: The 8 by 8 grid (notes 0 to 63), nine faders and the buttons around the grid.
+pads:
+  columns: 8
+  rows: 8
+  first: bottom-left
+  channel: 1
+  banks: {"": 0}
+controls:
+  - {name: "Fader {n}", kind: fader, cc: 48-56, group: Faders}
+  - {name: "Bottom {n}", kind: button, note: 64-71, group: Buttons}
+  - {name: "Side {n}", kind: button, note: 82-89, group: Buttons}
+  - {name: Shift, kind: button, note: 98, group: Buttons}

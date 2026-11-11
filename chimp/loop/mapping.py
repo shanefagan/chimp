@@ -2,11 +2,11 @@
 a parameter of the selected pad or of the master bus.
 
 By default any note plays a sound: note 36 is sound 1 (Kick) up to note 51, then it
-wraps, so an LPD8 program on notes 36-43 plays the first 8 sounds and a KO II group the
-first 12; and CC 70-77 (the LPD8 mk2's knobs out of the box) are eight knobs whose job
-depends on the knob page: the selected pad's sound, or the master. "Assign" learns a
-control for a sound, an action or one parameter, per device; assigned controls take
-precedence over the defaults.
+wraps; and CC 70-77 are eight knobs whose job depends on the knob page: the selected
+pad's sound, or the master. A controller Chimp knows (layout.py) maps by position
+instead: its pads to the page of sounds its bank or program stands for, its own knobs
+to knobs 1-8. "Assign" learns a control for a sound, an action or one parameter, per
+device; assigned controls take precedence over all of that.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ ACTIONS: dict[str, str] = {
     "quantise": "Quantise: next setting",
     "metronome": "Metronome on/off",
     "kit": "Next kit",
-    "page": "Knobs: pad / master",
+    "page": "Knobs: next page",
     "sound_next": "Next saved sound",
     "sound_prev": "Previous saved sound",
     # held: act while the button is down
@@ -104,15 +104,21 @@ class LoopSettings:
     volume: float = 0.8
     fixed_velocity: bool = False
     knob_page: str = "pad"
+    pads_shown: int = 0  # pads on screen: 0 follows the controller, else 8, 12 or 16
+    lpd8_jobs: list = field(default_factory=list)  # per drum program: "A", "B"... or "fx" ([] = A, B, fx)
     sound: dict = field(default_factory=dict)  # Engine.sound_settings(): pads and master
     # device -> {key: "sound:N" | action name}
     assign: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def target(self, device: str, key: str) -> str | None:
-        """What a press does: 'sound:N', an action name, or None."""
+    def target(self, device: str, key: str, table: dict[str, str] | None = None) -> str | None:
+        """What a press does: 'sound:N', an action name, or None. What you assigned comes
+        first, then `table` (what Chimp knows about this controller: layout.py), then the
+        defaults for any controller."""
         hit = self.assign.get(device, {}).get(key)
         if hit:
             return hit
+        if table and key in table:
+            return table[key] or None  # "": a pad Chimp knows has nothing on it
         if key.startswith("note:"):
             note = int(key.rsplit(":", 1)[1])
             return f"sound:{(note - DEFAULT_BASE_NOTE) % NUM_SOUNDS}"
@@ -178,6 +184,8 @@ class LoopSettings:
             "fixed_velocity",
             "sound",
             "knob_page",
+            "pads_shown",
+            "lpd8_jobs",
         ):
             if k in raw:
                 setattr(s, k, raw[k])

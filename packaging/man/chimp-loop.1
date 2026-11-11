@@ -22,14 +22,21 @@ and reverb. The master has a tempo-synced ping-pong delay, a reverb (hall, octav
 or octave-down shimmer, reverse), drive, a resonant DJ filter, a compressor and a
 brick-wall limiter, with presets.
 .PP
-Notes 36\(en51 play sounds 1\(en16 (an LPD8 program on notes 36\(en43 plays the first
-eight); any pad or button can be assigned to a sound or to a looper control. Loops can
+The window shows as many pads as the controller being played has, in its shape, a page
+of the kit at a time: for an LPD8 mk2, eight; its programs without desktop actions are
+page A (sounds 1\(en8), page B (9\(en16) and the FX page (roll and the glitches), and
+the window follows the program the device is on. Controllers
+.BR chimp (1)
+knows play by position; on any other, notes 36\(en51 play sounds 1\(en16.
+Any pad or button can be assigned to a sound or to a looper control. Loops can
 be saved, and exported as WAV or as a standard MIDI file (General MIDI drum notes on
 channel 10).
 .SH KNOBS
-CC 70\(en77 (the LPD8 mk2's knobs out of the box) are eight knobs on a page: the selected
-pad (level, pitch, attack, decay, cutoff, resonance, drive, reverb send) or the master
-(filter, resonance, drive, delay, echoes, reverb, size, compress). K switches page. Any
+The controller's knobs (the LPD8 mk2's, a known controller's own, or CC 70\(en77) are
+eight knobs on a page: the selected pad (level, pitch, attack, decay, cutoff, resonance,
+drive, reverb send; then pan, sustain, punch, delay send) or the master (filter,
+resonance, drive, delay, echoes, reverb, size, compress; then tone, shimmer, limit,
+swing, volume). K moves to the next page. Any
 parameter can be given its own knob or fader in the window. While the LPD8 is on a
 program with desktop actions (see
 .BR chimpd (1)),

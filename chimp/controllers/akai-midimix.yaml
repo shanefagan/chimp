@@ -1,0 +1,16 @@
+# Akai MIDImix, factory settings (channel 1). Each strip has three knobs, Mute, Rec arm
+# and a fader; Solo is the Mute button while SOLO is held.
+name: Akai MIDImix
+match: [MIDI Mix, MIDImix]
+about: Factory settings. Eight strips of three knobs, Mute, Rec arm and a fader, plus the master fader.
+controls:
+  - {name: "Top knob {n}", kind: knob, cc: [16, 20, 24, 28, 46, 50, 54, 58], group: Knobs}
+  - {name: "Middle knob {n}", kind: knob, cc: [17, 21, 25, 29, 47, 51, 55, 59], group: Knobs}
+  - {name: "Bottom knob {n}", kind: knob, cc: [18, 22, 26, 30, 48, 52, 56, 60], group: Knobs}
+  - {name: "Fader {n}", kind: fader, cc: [19, 23, 27, 31, 49, 53, 57, 61], group: Faders}
+  - {name: Master fader, kind: fader, cc: 62, group: Faders}
+  - {name: "Mute {n}", kind: button, note: [1, 4, 7, 10, 13, 16, 19, 22], group: Buttons}
+  - {name: "Solo {n}", kind: button, note: [2, 5, 8, 11, 14, 17, 20, 23], group: Buttons}
+  - {name: "Rec arm {n}", kind: button, note: [3, 6, 9, 12, 15, 18, 21, 24], group: Buttons}
+  - {name: Bank left, kind: button, note: 25, group: Buttons}
+  - {name: Bank right, kind: button, note: 26, group: Buttons}

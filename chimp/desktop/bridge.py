@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, Signal, Slot
 
+from .. import controllers
 from . import system, templates, unit
 from .config import (
     BUTTON_ACTIONS,
@@ -332,6 +333,16 @@ class DesktopBridge(QObject):
     def hasActions(self, slot: int) -> bool:
         return self.cfg.actions(slot).active()
 
+    @Slot(int, result=str)
+    def programJob(self, slot: int) -> str:
+        """What an LPD8 program is for: "Desktop", or its job in Chimp Loop ("Loop A")."""
+        from ..loop import programs
+
+        if self.cfg.actions(slot).active():
+            return "Desktop"
+        job = programs.lpd8_jobs(self.cfg.slots_with_actions(), programs.saved_jobs()).get(slot, "")
+        return programs.describe(job) if job else ""
+
     @Slot(bool, int, result="QVariantMap")
     def live(self, pad: bool, i: int) -> dict:
         return self._live.get(("p" if pad else "k") + str(i), {"value": -1, "text": "", "on": False})
@@ -634,9 +645,9 @@ class DesktopBridge(QObject):
             c.name = f"{c.kind.capitalize()} {counts[c.kind]}"
             prof.controls.append(c)
             added += 1
-        entry = templates.template_for(self._device)
-        if entry and added:
-            entry[1](prof.controls)  # known device: name and group the new pads straight away
+        known = templates.layout_for(self._device)
+        if known and added:
+            templates.apply(known, prof.controls)  # known device: name and group the new ones straight away
             self._group = ""
         self._changed(device=True)
         self.devicesChanged.emit()
@@ -670,26 +681,59 @@ class DesktopBridge(QObject):
 
     @Property(str, notify=deviceChanged)
     def templateLabel(self) -> str:
-        entry = templates.template_for(self._device)
-        return entry[0] if entry else ""
+        """The controller Chimp knows this device as ("" if it doesn't)."""
+        known = templates.layout_for(self._device)
+        return known.name if known else ""
+
+    @Property(str, notify=deviceChanged)
+    def templateAbout(self) -> str:
+        known = templates.layout_for(self._device)
+        return known.about if known else ""
+
+    @Property(int, notify=deviceChanged)
+    def templateMissing(self) -> int:
+        """How many of the known controller's controls this profile doesn't have yet."""
+        known = templates.layout_for(self._device)
+        if not known:
+            return 0
+        prof = self._prof()
+        have = {c.address for c in prof.controls} if prof else set()
+        return sum(1 for c in templates.controls_of(known) if c.address not in have)
+
+    @Property(str, notify=deviceChanged)
+    def deviceShape(self) -> str:
+        """For a controller Chimp only knows the shape of: what to say about it."""
+        c = controllers.find(self._device)
+        return c.about if c and not templates.layout_for(self._device) else ""
 
     def _auto_template(self) -> None:
-        """Known devices (the KO II) get their layout as soon as they have ungrouped pads."""
-        entry = templates.template_for(self._device)
+        """Known devices (the KO II) get their layout as soon as they have ungrouped controls."""
+        known = templates.layout_for(self._device)
         prof = self._prof()
-        if entry and prof and prof.controls and not any(c.group for c in prof.controls) and entry[1](prof.controls):
-            self._group = ""
-            self._changed(device=False)
+        if known and prof and prof.controls and not any(c.group for c in prof.controls):
+            _added, arranged = templates.apply(known, prof.controls)
+            if arranged:
+                self._group = ""
+                self._changed(device=False)
 
     @Slot()
     def applyTemplate(self) -> None:
-        entry = templates.template_for(self._device)
+        """Set the device up as the controller Chimp knows: add what's missing, name and
+        group the rest. Actions already given to controls stay."""
+        known = templates.layout_for(self._device)
+        if not known:
+            return
+        self._ensure_dev()
         prof = self._prof()
-        if entry and prof and entry[1](prof.controls):
-            self._group = ""
-            self._changed(device=True)
-            self._tick()
-            self.notify.emit(f"Arranged as {entry[0]}", "positive")
+        added, arranged = templates.apply(known, prof.controls, add_missing=True)
+        self._group = ""
+        self._changed(device=True)
+        self.devicesChanged.emit()
+        self._tick()
+        if added:
+            self.notify.emit(f"Set up as {known.name}: {added} control{'s' if added != 1 else ''} added", "positive")
+        else:
+            self.notify.emit(f"Arranged as {known.name}" if arranged else f"Already set up as {known.name}", "info")
 
     @Slot(int)
     def splitBanks(self, size: int) -> None:

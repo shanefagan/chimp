@@ -1,0 +1,9 @@
+# Akai MPD218: the shape only (teach Chimp its controls with Learn).
+name: Akai MPD218
+match: [MPD218]
+about: Sixteen pads in banks A to C, and six knobs. Use Learn for what they send.
+pads:
+  columns: 4
+  rows: 4
+  first: bottom-left
+  banks: 3

@@ -132,3 +132,24 @@ def test_config_is_private_to_you(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
     assert DesktopConfig.load(path).obs.password == secret
     assert not path.with_suffix(".json.tmp").exists()
+
+
+def test_what_each_lpd8_program_is_for(tmp_path, monkeypatch):
+    from chimp.loop import programs
+
+    monkeypatch.setattr(programs, "CONFIG_DIR", tmp_path)  # no saved order of your own
+    ctl = DesktopController.__new__(DesktopController)
+    ctl.cfg = DesktopConfig()  # desktop actions on program 4
+    ctl.looping = False
+    assert ctl.program_use(4) == "desktop control" and ctl.program_use(1) == "MIDI only"
+    ctl.looping = True  # Chimp Loop is open: the other programs are its pads
+    assert ctl.program_use(1) == "Chimp Loop A: sounds 1–8"
+    assert ctl.program_use(2) == "Chimp Loop B: sounds 9–16"
+    assert ctl.program_use(3) == "Chimp Loop FX: roll and glitches"
+    assert ctl.program_use(4) == "desktop control"
+    (tmp_path / "loop.json").write_text('{"lpd8_jobs": ["fx", "A"]}')
+    assert (
+        ctl.program_use(1) == "Chimp Loop FX: roll and glitches"
+        and ctl.program_use(3) == "Chimp Loop FX: roll and glitches"
+    )
+    assert ctl.program_use(2) == "Chimp Loop A: sounds 1–8"

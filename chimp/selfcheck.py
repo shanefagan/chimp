@@ -53,9 +53,19 @@ def check_install() -> int:
             failures.extend(f"{qml.name}: {e.toString()}" for e in component.errors())
     del engine, app
 
+    from chimp import controllers
+
+    for path in sorted(controllers.BUILTIN_DIR.glob("*.yaml")):
+        try:
+            controllers.parse(controllers.yaml.safe_load(path.read_text(encoding="utf-8")), path.stem)
+        except (OSError, controllers.yaml.YAMLError, controllers.Invalid) as exc:
+            failures.append(f"controllers/{path.name}: {exc}")
+    if not any(controllers.BUILTIN_DIR.glob("*.yaml")):
+        failures.append("controllers: none installed")
+
     for line in failures:
         print(line, file=sys.stderr)
     if failures:
         return 1
-    print(f"chimp {chimp_version()}: modules and QML load")
+    print(f"chimp {chimp_version()}: modules, QML and controllers load")
     return 0

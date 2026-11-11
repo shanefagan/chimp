@@ -25,6 +25,8 @@ ColumnLayout {
         text: {
             if (!desktop.deviceConnected)
                 return desktop.currentDevice + " isn't connected. You can still edit its profiles."
+            if (desktop.controlCount === 0 && desktop.templateLabel !== "")
+                return "Chimp knows the " + desktop.templateLabel + ". Set it up in one click, or teach it with Learn if you've reprogrammed it."
             if (desktop.controlCount === 0)
                 return "Click Learn, then move every knob and fader and press each button to teach the app this device."
             if (!desktop.serviceRunning)
@@ -107,7 +109,7 @@ ColumnLayout {
             visible: !desktop.learning
             text: desktop.controlCount === 0 ? "Learn controls" : "Learn more controls"
             icon.name: "media-record"
-            highlighted: desktop.controlCount === 0
+            highlighted: desktop.controlCount === 0 && desktop.templateLabel === ""
             enabled: desktop.deviceConnected
             onClicked: desktop.startLearn()
         }
@@ -167,11 +169,21 @@ ColumnLayout {
         Layout.topMargin: Kirigami.Units.gridUnit * 2
         visible: desktop.controlCount === 0 && !desktop.learning
         icon.name: "audio-midi"
-        text: "No controls learned yet"
-        explanation: desktop.deviceConnected
-                     ? "Click Learn controls, then move every knob and fader and press each button. "
-                       + "The app works out what each one is: knob, fader, endless encoder or button."
-                     : "Connect " + desktop.currentDevice + " to learn its controls."
+        text: desktop.templateLabel !== "" ? desktop.templateLabel : "No controls learned yet"
+        explanation: desktop.templateLabel !== ""
+                     ? desktop.templateAbout + "\n\nThese are its factory settings. Give the controls actions afterwards; "
+                       + "Learn adds anything that's missing or that you've changed on the device."
+                     : (desktop.deviceShape !== "" ? desktop.deviceShape + "\n\n" : "")
+                       + (desktop.deviceConnected
+                          ? "Click Learn controls, then move every knob and fader and press each button. "
+                            + "The app works out what each one is: knob, fader, endless encoder or button."
+                          : "Connect " + desktop.currentDevice + " to learn its controls.")
+        helpfulAction: Kirigami.Action {
+            enabled: desktop.templateLabel !== ""
+            text: "Set up as " + desktop.templateLabel
+            icon.name: "view-grid"
+            onTriggered: desktop.applyTemplate()
+        }
     }
 
     RowLayout {
@@ -205,7 +217,9 @@ ColumnLayout {
                 QQC2.MenuItem {
                     visible: desktop.templateLabel !== ""
                     height: visible ? implicitHeight : 0
-                    text: "Use layout: " + desktop.templateLabel
+                    text: desktop.templateMissing > 0
+                          ? "Set up as " + desktop.templateLabel + " (adds " + desktop.templateMissing + " missing)"
+                          : "Arrange as " + desktop.templateLabel
                     onTriggered: desktop.applyTemplate()
                 }
                 QQC2.MenuItem { text: "Split buttons into banks of 8"; onTriggered: desktop.splitBanks(8) }

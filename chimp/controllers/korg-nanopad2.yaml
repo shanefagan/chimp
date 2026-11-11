@@ -1,0 +1,10 @@
+# Korg nanoPAD2: the shape only (teach Chimp its pads with Learn).
+name: Korg nanoPAD2
+match: [nanoPAD2]
+about: Sixteen pads, eight wide, in four scenes. Use Learn for what they send.
+pads:
+  columns: 8
+  rows: 2
+  first: bottom-left
+  banks: 4
+  word: Scene

@@ -1,0 +1,11 @@
+# Novation Launch Control XL, factory template 1 (channel 9).
+name: Novation Launch Control XL
+match: [Launch Control XL]
+about: Factory template 1 (channel 9). Three rows of knobs, eight faders and two rows of buttons.
+controls:
+  - {name: "Send A {n}", kind: knob, cc: 13-20, channel: 9, group: Knobs}
+  - {name: "Send B {n}", kind: knob, cc: 29-36, channel: 9, group: Knobs}
+  - {name: "Pan {n}", kind: knob, cc: 49-56, channel: 9, group: Knobs}
+  - {name: "Fader {n}", kind: fader, cc: 77-84, channel: 9, group: Faders}
+  - {name: "Focus {n}", kind: button, note: [41, 42, 43, 44, 57, 58, 59, 60], channel: 9, group: Buttons}
+  - {name: "Control {n}", kind: button, note: [73, 74, 75, 76, 89, 90, 91, 92], channel: 9, group: Buttons}

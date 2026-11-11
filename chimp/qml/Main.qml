@@ -230,12 +230,23 @@ Kirigami.ApplicationWindow {
                     QQC2.TabButton {
                         required property int index
                         readonly property bool slotDirty: { backend.revision; return backend.isDirty(index + 1) }
-                        text: "Program " + (index + 1)
-                              + (desktop && (desktop.revision, desktop.hasActions(index + 1)) ? " · Desktop" : "")
+                        readonly property string job: { desktop.revision; return desktop.programJob(index + 1) }
+                        text: "Program " + (index + 1) + (job !== "" ? " · " + job : "")
                               + (backend.activeProgram === index + 1 ? "  ●" : "")
                               + (slotDirty ? "  (edited)" : "")
                     }
                 }
+            }
+
+            QQC2.Label {
+                Layout.fillWidth: true
+                visible: root.isLpd8
+                wrapMode: Text.WordWrap
+                font: Kirigami.Theme.smallFont
+                opacity: 0.7
+                text: "Each program is its own set of pads and knobs: hold PROGRAM and press pad 1–4 on the LPD8 to switch. "
+                      + "A program whose pads or knobs have actions controls the desktop. The others are Chimp Loop's: "
+                      + "Loop A plays sounds 1–8, Loop B sounds 9–16, and Loop FX is roll and the glitches. ● is the one the LPD8 is on."
             }
 
             // --- body -----------------------------------------------------------

@@ -13,10 +13,12 @@ from PySide6.QtCore import Property, QFileSystemWatcher, QObject, QTimer, QUrl, 
 from PySide6.QtGui import QDesktopServices
 
 from ..desktop.midi import MidiHub
-from ..desktop.service import LPD8_CLIENT, STATUS_PATH
-from . import dsp, files, voice
+from ..desktop.service import STATUS_PATH
+from ..device import Lpd8Device
+from . import dsp, files, layout, voice
 from . import kit as kits
 from .engine import (
+    KNOB_PAGE_LABELS,
     KNOB_PAGES,
     MASTER_CHOICES,
     MASTER_KNOBS,
@@ -81,15 +83,37 @@ class LoopController(QObject):
         self._sound_name = ""
         self.hub = MidiHub("Chimp Loop", realtime=self._on_midi_now)
         self.hub.message.connect(self._on_midi_ui)
-        self.hub.devicesChanged.connect(self.changed)
+        self.hub.devicesChanged.connect(self._on_devices)
         self.pads = Gamepads(self._input_now)
-        self.pads.event.connect(self._input_ui)
+        self.pads.inputEvent.connect(self._input_ui)
         self.pads.devicesChanged.connect(self.changed)
         self._timer = QTimer(self, interval=33, timeout=self._on_tick)
         # The LPD8 on one of its desktop programs belongs to the desktop service: its knobs
         # (CC 70-77 on every program, out of the box) mustn't also turn the looper's.
         self._lpd8_desktop = 0  # that program's number, or 0
         self._status_mtime = 0.0
+        self._status_pid = 0  # the desktop service, while its status file is fresh
+        self._status_active = 0  # the LPD8 program it last saw
+        self._status_programs: set[int] = set()  # the programs it uses for the desktop
+        self._desktop_programs: set[int] = set()
+        self._status_seen: tuple = (set(), 0)
+        # The LPD8's programs, and which one it's on, read from the device itself (the
+        # programs all send the same notes out of the box: only the device can say).
+        self.lpd8 = Lpd8Device(self, client_name="Chimp Loop")
+        self.lpd8.connectionChanged.connect(self._on_lpd8_connection)
+        self.lpd8.programReceived.connect(self._on_lpd8_program)
+        self.lpd8.activeProgramReceived.connect(self._on_lpd8_active)
+        self._lpd8_programs: dict = {}
+        self._lpd8_active = 0  # 0 = not known
+        self._lpd8_poll = QTimer(self, interval=350, timeout=self._poll_lpd8)
+        # What Chimp knows each connected controller's pads and knobs do (layout.py).
+        # Replaced whole, never changed in place: the MIDI thread reads it.
+        self._tables: dict[str, dict[str, str]] = {}
+        # The pads on screen: shaped like the controller in your hands, a page at a time.
+        self._hand = ""  # that controller: the known one whose pads were hit last
+        self._shape = layout.Shape()
+        self._view = 0  # the page of sounds showing
+        self._view_fx = False  # ...or the FX page (rolls and glitches) instead
         self._status_timer = QTimer(self, interval=400, timeout=self._poll_status)
         # Knob sweeps change parameters many times a second: save once they settle.
         self._save_later = QTimer(self, singleShot=True, interval=1500, timeout=self._save_settings)
@@ -101,13 +125,18 @@ class LoopController(QObject):
 
     def start(self) -> None:
         self._poll_status()
+        self._reshape()
         self.hub.start()
+        self.lpd8.start()
+        self._lpd8_poll.start()
         self.pads.start()
         self._timer.start()
         self._status_timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
+        self._lpd8_poll.stop()
+        self.lpd8.stop()
         self.hub.stop()
         self.pads.stop()
         self._save_settings()
@@ -303,22 +332,26 @@ class LoopController(QObject):
             mtime = STATUS_PATH.stat().st_mtime
         except OSError:
             mtime = 0.0
-        if mtime == self._status_mtime:
-            return
-        self._status_mtime = mtime
-        busy = 0
-        with contextlib.suppress(OSError, ValueError, TypeError):
-            st = json.loads(STATUS_PATH.read_text())
-            pid = int(st.get("pid", 0))
-            alive = pid > 0 and Path(f"/proc/{pid}").exists() and pid != os.getpid()
-            active = int(st.get("active") or 0)
-            if alive and st.get("connected") and active in (st.get("desktopPrograms") or []):
-                busy = active
-        if busy != self._lpd8_desktop:
-            self._lpd8_desktop = busy
-            if busy:
-                self.notify.emit(f"LPD8 is on Program {busy} (desktop control): switch program to play drums")
-            self.changed.emit()
+        if mtime != self._status_mtime:
+            self._status_mtime = mtime
+            pid, active, desktop = 0, 0, set()
+            with contextlib.suppress(OSError, ValueError, TypeError):
+                st = json.loads(STATUS_PATH.read_text())
+                pid = int(st.get("pid", 0))
+                if st.get("connected"):
+                    active = int(st.get("active") or 0)
+                desktop = {int(n) for n in st.get("desktopPrograms") or []}
+            self._status_pid, self._status_active, self._status_programs = pid, active, desktop
+        # the file outlives a service that was killed: its programs are only the desktop's
+        # while it runs
+        pid = self._status_pid
+        alive = pid > 0 and pid != os.getpid() and Path(f"/proc/{pid}").exists()
+        desktop = self._status_programs if alive else set()
+        seen = (desktop, self._status_active if alive else 0)
+        if seen != self._status_seen:
+            self._status_seen = seen
+            self._desktop_programs = desktop
+            self._update_lpd8()
 
     @Property(str, notify=changed)
     def lpd8Note(self) -> str:
@@ -326,11 +359,259 @@ class LoopController(QObject):
         return f"LPD8 on Program {n} = desktop control (switch program to drum)" if n else ""
 
     def _ignored(self, device: str) -> bool:
-        return bool(self._lpd8_desktop) and device == LPD8_CLIENT
+        return bool(self._lpd8_desktop) and device == layout.LPD8
+
+    # --- the LPD8's programs, and the controller in your hands ---------------------------
+
+    def _on_lpd8_connection(self, connected: bool, _port: str) -> None:
+        self._lpd8_programs, self._lpd8_active = {}, 0
+        if connected:
+            for slot in range(1, 5):
+                self.lpd8.request_program(slot)
+            self.lpd8.request_active_program()
+        self._update_lpd8()
+
+    def _poll_lpd8(self) -> None:
+        if self.lpd8.connected:
+            self.lpd8.request_active_program()
+
+    def _on_lpd8_program(self, slot: int, program) -> None:
+        self._lpd8_programs[slot] = program
+        if slot == self._active_program():
+            self._update_lpd8()
+
+    def _on_lpd8_active(self, slot: int) -> None:
+        if slot == self._lpd8_active:
+            return
+        switched = self._lpd8_active != 0
+        self._lpd8_active = slot
+        self.lpd8.request_program(slot)  # it may have been edited since it was read
+        self._update_lpd8(switched=switched)
+
+    def _active_program(self) -> int:
+        """The program the LPD8 is on: from the device, or failing that the desktop service."""
+        return self._lpd8_active or self._status_active
+
+    def _lpd8_job(self) -> str:
+        """What the LPD8's pads do on its current program: "A", "B"..., "fx", or "" when
+        that isn't known or the program is the desktop's."""
+        active = self._active_program()
+        if not active or active in self._desktop_programs or layout.LPD8 not in self.hub.devices:
+            return ""
+        return layout.lpd8_jobs(self._desktop_programs, self.s.lpd8_jobs).get(active, "")
+
+    def _update_lpd8(self, switched: bool = False) -> None:
+        """The LPD8's program, or what's known about it, changed: redo what its pads do
+        and show its page."""
+        active = self._active_program()
+        desktop = active if active in self._desktop_programs else 0
+        if desktop != self._lpd8_desktop:
+            self._lpd8_desktop = desktop
+            if desktop:
+                self.notify.emit(f"LPD8 is on Program {desktop} (desktop control): switch program to play drums")
+        job = self._lpd8_job()
+        before = self._tables.get(layout.LPD8)
+        self._rebuild_tables()
+        if self._tables.get(layout.LPD8) != before:
+            self._release_holds()  # a pad held across the switch would never be let go
+        if job and (switched or not self._hand):
+            self._hand = layout.LPD8
+        if job and self._hand == layout.LPD8:
+            self._reshape()
+            if job == layout.FX:
+                self._view_fx = True
+            else:
+                self._view_fx = False
+                self._view = min(layout.job_page(job), layout.page_count(self._shape) - 1)
+            if switched:
+                # the knobs follow: the selected pad's sound on a page of pads, the master on FX
+                on_master = self.e.knob_page.startswith("master")
+                if (job == layout.FX) != on_master:
+                    self.e.knob_page = "master" if job == layout.FX else "pad"
+                self.notify.emit(f"LPD8 Program {active}: {self._job_text(job)}")
+        self.e._changed()
+        self.changed.emit()
+
+    def _job_text(self, job: str) -> str:
+        if job == layout.FX:
+            return "FX pads (roll and glitches), knobs on the master"
+        sounds = layout.page_sounds(self._shape, layout.job_page(job))
+        return f"page {job}, sounds {sounds[0] + 1}–{sounds[-1] + 1}" if sounds else f"page {job}"
+
+    def _release_holds(self) -> None:
+        for name in list(self._held):
+            self._hold(name, False)
+        for sound in self.e.rolling():
+            self.e.roll_stop(sound)
+
+    def _rebuild_tables(self) -> None:
+        tables: dict[str, dict[str, str]] = {}
+        for device in self.hub.devices:
+            if device == layout.LPD8:
+                job = self._lpd8_job()
+                program = self._lpd8_programs.get(self._active_program())
+                if job and program is not None:
+                    tables[device] = layout.lpd8_table(program, job)
+            else:
+                known = layout.controllers.find(device)
+                if known is not None:
+                    tables[device] = layout.table_for(known)
+        self._tables = tables
+
+    def _on_devices(self) -> None:
+        if self._hand and self._hand not in self.hub.devices:
+            self._hand = ""
+        if not self._hand:  # nothing in your hands yet: the first controller Chimp knows
+            self._hand = next((d for d in self.hub.devices if layout.shape_of(d)), "")
+        self._reshape()
+        self._update_lpd8()
+
+    def _reshape(self) -> bool:
+        """Fit the pads on screen to the controller in hand (or the size you chose)."""
+        if self.s.pads_shown in layout.SIZES:
+            shape = layout.forced(self.s.pads_shown)
+        else:
+            shape = (layout.shape_of(self._hand) if self._hand else None) or layout.Shape()
+        if shape == self._shape:
+            return False
+        first = self._view * self._shape.size  # keep the same sounds in view
+        self._shape = shape
+        self._view = min(first // shape.size, layout.page_count(shape) - 1)
+        return True
+
+    def _played(self, device: str, target: str) -> None:
+        """A pad was hit on a controller: it's the one in your hands now, and the page on
+        screen is the one it's playing."""
+        moved = False
+        if device != self._hand and layout.shape_of(device):
+            self._hand = device
+            moved = self._reshape()
+        if device != self._hand and self._hand:
+            return  # some other controller: the pads stay with the one in hand
+        if target.startswith("sound:"):
+            page = int(target[6:]) // self._shape.size
+            if page != self._view or self._view_fx:
+                self._view, self._view_fx, moved = page, False, True
+        elif device == layout.LPD8 and self._lpd8_job() == layout.FX and not self._view_fx:
+            self._view_fx = moved = True
+        if moved:
+            self.changed.emit()
+
+    @Property(int, notify=changed)
+    def padColumns(self) -> int:
+        return self._shape.columns
+
+    @Property(int, notify=changed)
+    def padRows(self) -> int:
+        return self._shape.rows
+
+    @Property("QVariantList", notify=changed)
+    def padCells(self) -> list:
+        """The pads on screen in drawing order (top row first): a sound, an FX pad
+        (roll or a glitch, held), or a gap."""
+        gap = {"sound": -1, "fx": "", "label": ""}
+        if self._view_fx:
+            names = dict(ACTIONS)
+            pads = layout.FX_PADS[: self._shape.size]
+            return [
+                {
+                    "sound": -1,
+                    "fx": pads[i],
+                    "label": names[pads[i]].removeprefix("Hold: ").replace(" (+ pad)", "").capitalize(),
+                }
+                if i >= 0
+                else gap
+                for i in layout.cells(self._shape, len(pads))
+            ]
+        sounds = layout.page_sounds(self._shape, self._view)
+        return [
+            {"sound": sounds[i], "fx": "", "label": ""} if i >= 0 else gap
+            for i in layout.cells(self._shape, len(sounds))
+        ]
+
+    @Property("QVariantList", notify=changed)
+    def stepSounds(self) -> list:
+        """The step grid's rows: the page of sounds on screen."""
+        return layout.page_sounds(self._shape, self._view)
+
+    @Property("QVariantList", notify=changed)
+    def pageTabs(self) -> list:
+        """The pages to switch between; `here` marks the one the controller is on."""
+        job = self._lpd8_job() if self._hand == layout.LPD8 else ""
+        tabs = []
+        for i in range(layout.page_count(self._shape)):
+            sounds = layout.page_sounds(self._shape, i)
+            name = layout.page_name(i)
+            tabs.append(
+                {"id": str(i), "label": name, "detail": f"{sounds[0] + 1}–{sounds[-1] + 1}", "here": job == name}
+            )
+        if job or self._view_fx:
+            tabs.append({"id": layout.FX, "label": "FX", "detail": "roll, glitches", "here": job == layout.FX})
+        return tabs if len(tabs) > 1 else []
+
+    @Property(str, notify=changed)
+    def viewPage(self) -> str:
+        return layout.FX if self._view_fx else str(self._view)
+
+    @Slot(str)
+    def setViewPage(self, page: str) -> None:
+        """Look at another page. The controller keeps playing the one it's on, and the
+        view goes back there with its next pad."""
+        if page == layout.FX:
+            self._view_fx = True
+        elif page.isdigit() and int(page) < layout.page_count(self._shape):
+            self._view, self._view_fx = int(page), False
+        self.changed.emit()
+
+    @Property(str, notify=changed)
+    def handNote(self) -> str:
+        """Whose pads these are."""
+        if self.s.pads_shown in layout.SIZES or not self._hand:
+            return ""
+        return self._shape.name or self._hand  # (the LPD8's program is in lpd8Programs)
+
+    @Property("QVariantList", notify=changed)
+    def lpd8Programs(self) -> list:
+        """What each LPD8 program does here, for the hint under the pads."""
+        if layout.LPD8 not in self.hub.devices:
+            return []
+        jobs = layout.lpd8_jobs(self._desktop_programs, self.s.lpd8_jobs)
+        out = []
+        for slot in range(1, 5):
+            job = jobs.get(slot, "")
+            text = "desktop" if not job else "FX" if job == layout.FX else f"page {job}"
+            out.append({"program": slot, "text": text, "here": slot == self._active_program()})
+        return out
+
+    @Property(int, notify=changed)
+    def padsShown(self) -> int:
+        return self.s.pads_shown if self.s.pads_shown in layout.SIZES else 0
+
+    @Slot(int)
+    def setPadsShown(self, n: int) -> None:
+        self.s.pads_shown = n if n in layout.SIZES else 0
+        self._reshape()
+        self._save_settings()
+        self.changed.emit()
+
+    @Property(int, notify=changed)
+    def knobCount(self) -> int:
+        """How many knobs the controller in hand has for the knob page (8 at most)."""
+        shape = layout.shape_of(self._hand) if self._hand else None
+        return shape.knobs if shape else layout.MAX_KNOBS
+
+    @Property("QVariantList", notify=changed)
+    def knobPages(self) -> list:
+        return [{"id": k, "label": KNOB_PAGE_LABELS[k]} for k in KNOB_PAGES]
+
+    def _target(self, device: str, key: str) -> str | None:
+        return self.s.target(device, key, self._tables.get(device))
 
     # --- MIDI ------------------------------------------------------------------------
 
     def _param_of(self, target: str | None) -> str | None:
+        """The parameter a knob target turns right now (None: not a knob, or a knob with
+        nothing on this knob page)."""
         if not target:
             return None
         if target.startswith("knob:"):
@@ -338,6 +619,10 @@ class LoopController(QObject):
         if target.startswith("param:"):
             return target[6:]
         return None
+
+    @staticmethod
+    def _is_knob(target: str | None) -> bool:
+        return bool(target) and target.startswith(("knob:", "param:"))
 
     @staticmethod
     def _events(msg: list[int]) -> list[tuple[str, str, float]]:
@@ -370,14 +655,13 @@ class LoopController(QObject):
         knobs, rolls, glitches). True if the input was a knob (so a CC isn't also a press)."""
         if self._assigning or self._ignored(device):
             return False
-        target = self.s.target(device, key)
+        target = self._target(device, key)
         if kind == "value":
             pid = self._param_of(target)
             if pid:
                 self.e.set_param(pid, value)
-                return True
-            return False
-        if not target or self._param_of(target):
+            return self._is_knob(target)
+        if not target or self._is_knob(target):
             return False
         if target.startswith("sound:"):
             sound = int(target[6:])
@@ -407,11 +691,13 @@ class LoopController(QObject):
                 self._learn(device, key)
                 return True
             return False
-        target = self.s.target(device, key)
+        target = self._target(device, key)
         if kind == "value":
-            return bool(self._param_of(target))
-        if not target or self._param_of(target):
+            return self._is_knob(target)
+        if not target or self._is_knob(target):
             return False
+        if kind == "press" and (target.startswith("sound:") or target in HOLD_ACTIONS):
+            self._played(device, target)
         if target.startswith("sound:") and kind == "press":
             if (device, key) in self._consumed:
                 self._consumed.discard((device, key))
@@ -809,7 +1095,7 @@ class LoopController(QObject):
         out = []
         for key, (label, default) in voice.PAD_KNOBS.items():
             pid = f"p.{key}"
-            knob = page.index(pid) + 1 if pid in page else 0
+            knob = page.index(pid) + 1 if pid in page and page.index(pid) < self.knobCount else 0
             out.append({
                 "id": pid, "label": label, "value": pad[key], "default": default,
                 "text": self._pad_text(key, pad[key], pad), "assigned": ", ".join(got.get(pid, [])), "knob": knob,
@@ -824,7 +1110,7 @@ class LoopController(QObject):
         out = []
         for key, (label, default) in MASTER_KNOBS.items():
             pid = f"m.{key}"
-            knob = page.index(pid) + 1 if pid in page else 0
+            knob = page.index(pid) + 1 if pid in page and page.index(pid) < self.knobCount else 0
             out.append({
                 "id": pid, "label": label, "value": s[key], "default": default,
                 "text": self._master_text(key, s[key]), "assigned": ", ".join(got.get(pid, [])), "knob": knob,
@@ -985,8 +1271,9 @@ class LoopController(QObject):
             self.setKit(self.kitIndex + 1)
             self.notify.emit(f"Kit: {self._kit_name}")
         elif action == "page":
-            self.setKnobPage("master" if e.knob_page == "pad" else "pad")
-            self.notify.emit(f"Knobs: {e.knob_page}")
+            pages = list(KNOB_PAGES)
+            self.setKnobPage(pages[(pages.index(e.knob_page) + 1) % len(pages)])
+            self.notify.emit(f"Knobs: {KNOB_PAGE_LABELS[e.knob_page]}")
         elif action == "sound_next":
             self._step_sound(1)
         elif action == "sound_prev":

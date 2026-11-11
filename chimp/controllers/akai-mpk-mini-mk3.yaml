@@ -1,0 +1,12 @@
+# Akai MPK mini mk3: the knobs' factory CCs and the pads' shape. The pads' notes depend
+# on the program, so teach Chimp those with Learn.
+name: Akai MPK mini mk3
+match: [MPK mini 3, MPK mini mk3]
+about: Eight knobs (factory CCs) and eight pads in banks A and B. Use Learn for the pads.
+pads:
+  columns: 4
+  rows: 2
+  first: bottom-left
+  banks: 2
+controls:
+  - {name: "Knob {n}", kind: knob, cc: 70-77}

@@ -1,0 +1,16 @@
+# teenage engineering EP-133 K.O. II: groups A-D each shift the 12 pads by 12 notes.
+# Its knobs and fader don't send MIDI. Pad order as the notes run (36 = pad 1).
+name: teenage engineering EP-133 K.O. II
+match: [EP-133]
+about: Twelve pads in groups A to D (notes 36 to 83) and the transport.
+pads:
+  columns: 3
+  rows: 4
+  first: top-left
+  channel: 1
+  word: Group
+  banks: {A: 36, B: 48, C: 60, D: 72}
+controls:
+  - {name: Start, kind: button, rt: start, group: Transport}
+  - {name: Continue, kind: button, rt: continue, group: Transport}
+  - {name: Stop, kind: button, rt: stop, group: Transport}
