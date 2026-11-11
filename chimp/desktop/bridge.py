@@ -36,7 +36,21 @@ LPD8 = "LPD8 mk2"
 
 
 def _types(table: dict) -> list[dict]:
-    return [{"id": k, "label": v[0], "targetLabel": v[1], "hint": v[2]} for k, v in table.items()]
+    # "file": the target is a file, picked with Browse...; "sound": the soundboard's settings
+    return [
+        {"id": k, "label": v[0], "targetLabel": v[1], "hint": v[2], "file": k == "sound", "sound": k == "sound"}
+        for k, v in table.items()
+    ]
+
+
+def _option_value(key: str, value):
+    """A setting from the editor, as stored: volume is a whole percentage."""
+    if key == "volume":
+        try:
+            return max(0, min(100, round(float(value))))
+        except (TypeError, ValueError):
+            return 100
+    return str(value)[:200]
 
 
 def _installed_apps() -> list[dict]:
@@ -119,6 +133,7 @@ class DesktopBridge(QObject):
         self._backend = backend
         self.cfg = DesktopConfig.load()
         self._revision = 0
+        self._preview = None  # a Soundboard for trying clips, made on first use
         self._running = False
         self._paused = False
         self._live: dict = {}
@@ -233,6 +248,10 @@ class DesktopBridge(QObject):
             ]
         if kind == "media":
             return [{"value": k, "label": k} for k in MEDIA_SHORTCUTS]
+        if kind == "sound":
+            from .soundboard import clip_label
+
+            return [{"value": t, "label": clip_label(t) + "  ·  " + t} for t in sorted(set(self.cfg.sound_targets()))]
         if kind == "playing_volume":
             playing = [label for label, _ in system.playing_groups()]
             return [
@@ -327,7 +346,7 @@ class DesktopBridge(QObject):
     def action(self, slot: int, pad: bool, i: int) -> dict:
         pa = self.cfg.actions(slot)
         a = (pa.pads if pad else pa.knobs)[i]
-        return {"type": a.type, "target": a.target}
+        return {"type": a.type, "target": a.target, "options": dict(a.options)}
 
     @Slot(int, result=bool)
     def hasActions(self, slot: int) -> bool:
@@ -367,6 +386,57 @@ class DesktopBridge(QObject):
         if items[i].target != target:
             items[i].target = target
             self._changed(bump=False)  # don't rebuild the field the user is typing in
+
+    @Slot(int, bool, int, str, "QVariant")
+    def setOption(self, slot: int, pad: bool, i: int, key: str, value) -> None:
+        pa = self.cfg.actions(slot)
+        a = (pa.pads if pad else pa.knobs)[i]
+        v = _option_value(key, value)
+        if a.options.get(key) != v:
+            a.options[key] = v
+            self._changed(bump=key != "volume")  # (a slider being dragged needn't rebuild the tile)
+
+    # --- soundboard: the editor plays clips itself, to try them ----------------------------
+
+    @Slot(result="QVariantList")
+    def soundModes(self) -> list:
+        from .soundboard import MODES
+
+        return [{"id": k, "label": v} for k, v in MODES.items()]
+
+    @Slot(result="QVariantList")
+    def soundOutputs(self) -> list:
+        """[{id, label}]: "" is the default output, the rest by name."""
+        from .soundboard import output_devices
+
+        return [{"id": "", "label": "Default output"}] + [{"id": d, "label": d} for d in output_devices()]
+
+    @Slot(str, "QVariantMap")
+    def previewSound(self, target: str, options: dict) -> None:
+        if self._preview is None:
+            from .soundboard import Soundboard
+
+            self._preview = Soundboard(lambda text: self.notify.emit(text, "warning"), parent=self)
+        opts = dict(options or {})
+        opts["mode"] = "restart"
+        self._preview.press("preview", target, opts)
+
+    @Slot()
+    def stopPreview(self) -> None:
+        if self._preview is not None:
+            self._preview.stop_all()
+
+    @Slot(result=str)
+    def soundFolder(self) -> str:
+        """Where Browse... starts: the folder of the last clip chosen, or Music."""
+        from .soundboard import clip_path
+
+        for t in reversed(self.cfg.sound_targets()):
+            folder = clip_path(t).parent
+            if folder.is_dir():
+                return str(folder)
+        music = Path.home() / "Music"
+        return str(music if music.is_dir() else Path.home())
 
     @staticmethod
     def _new_action(kind: str, table: dict) -> Action:
@@ -536,7 +606,7 @@ class DesktopBridge(QObject):
             "mode": c.mode,
             "where": c.describe(),
             "group": c.group,
-            "action": {"type": c.action.type, "target": c.action.target},
+            "action": {"type": c.action.type, "target": c.action.target, "options": dict(c.action.options)},
         }
 
     @Slot(int, result="QVariantMap")
@@ -585,6 +655,14 @@ class DesktopBridge(QObject):
         if c and c.action.target != target:
             c.action.target = target
             self._changed(bump=False)
+
+    @Slot(int, str, "QVariant")
+    def setControlOption(self, i: int, key: str, value) -> None:
+        c = self._control(i)
+        v = _option_value(key, value)
+        if c and c.action.options.get(key) != v:
+            c.action.options[key] = v
+            self._changed(device=True)
 
     @Slot(int)
     def removeControl(self, i: int) -> None:

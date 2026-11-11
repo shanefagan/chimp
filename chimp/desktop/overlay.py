@@ -52,10 +52,18 @@ def short_label(a: Action) -> str:
         "obs_stream": "OBS stream",
         "obs_mute": f"OBS mute {t}".strip(),
         "marker": f"Marker: {t}" if t else "Marker",
+        "sound": _clip(t),
+        "sound_stop": "Stop sounds",
         "profile_next": "Next profile",
         "profile_prev": "Prev profile",
     }.get(a.type)
     return label if label is not None else _plugin_short(a.type)
+
+
+def _clip(target: str) -> str:
+    from .soundboard import clip_label
+
+    return clip_label(target) or "Sound"
 
 
 def _plugin_short(t: str) -> str:

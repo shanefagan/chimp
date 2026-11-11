@@ -152,6 +152,7 @@ Rectangle {
             tooltipText: "What this pad does on your desktop while Program " + backend.currentSlot + " is active on the LPD8"
             onTypeChosen: (kind) => desktop.setType(backend.currentSlot, true, tile.padIndex, kind)
             onTargetEdited: (t) => desktop.setTarget(backend.currentSlot, true, tile.padIndex, t)
+            onOptionEdited: (key, value) => desktop.setOption(backend.currentSlot, true, tile.padIndex, key, value)
         }
     }
 }

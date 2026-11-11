@@ -25,6 +25,11 @@ def describe(a: Action) -> str:
     return label + (f" ({a.target})" if a.target.strip() else "")
 
 
+def sound_key(who: str, target: str) -> str:
+    """Which pad a clip belongs to, for toggle, restart and hold (and the pad's light)."""
+    return f"{who}|{target.strip()}"
+
+
 class ActionRunner(QObject):
     def __init__(
         self,
@@ -56,6 +61,19 @@ class ActionRunner(QObject):
         self._osd_pending: tuple | None = None
         self._osd_timer = QTimer(self, singleShot=True, timeout=self._osd_flush)
         self.markers = Markers(obs, self._marked, parent=self)
+        self._sounds = None
+        self._sounds_changed: Callable[[], None] | None = None  # set by the service: pad lights
+
+    @property
+    def sounds(self):
+        """The soundboard, started the first time a pad plays a sound."""
+        if self._sounds is None:
+            from .soundboard import Soundboard
+
+            self._sounds = Soundboard(self._report, parent=self)
+            if self._sounds_changed is not None:
+                self._sounds.changed.connect(self._sounds_changed)
+        return self._sounds
 
     def _marked(self, summary: str) -> None:
         self._report(summary)
@@ -112,6 +130,10 @@ class ActionRunner(QObject):
             system.run_command(t)
         elif a.type == "marker":
             self.markers.add(t)
+        elif a.type == "sound":
+            self.sounds.press(sound_key(who, t), t, a.options)
+        elif a.type == "sound_stop":
+            self.sounds.stop_all()
         elif plugins.handles(a.type):
             plugins.press(a.type, t)
         elif a.type.startswith("obs_"):
@@ -131,7 +153,9 @@ class ActionRunner(QObject):
 
     def release(self, a: Action, who: str) -> None:
         """The button was let go: ends what a hold action started."""
-        if a.type in HOLD_ACTIONS and plugins.handles(a.type):
+        if a.type == "sound" and self._sounds is not None:
+            self._sounds.release(sound_key(who, a.target.strip()), a.options)
+        elif a.type in HOLD_ACTIONS and plugins.handles(a.type):
             plugins.release(a.type, a.target.strip())
 
     def _after_mute(self, what: str) -> None:

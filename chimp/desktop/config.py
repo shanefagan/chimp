@@ -71,6 +71,8 @@ PAD_ACTIONS: dict[str, tuple[str, str, str]] = {
     "obs_stream": ("OBS: toggle streaming", "", ""),
     "obs_mute": ("OBS: toggle source mute", "Source", "audio source name, e.g. Mic/Aux"),
     "marker": ("Add marker", "Note", "optional, e.g. retake (saved with the time, for cutting later)"),
+    "sound": ("Play sound", "Sound file", "a WAV, MP3, OGG, FLAC... file"),
+    "sound_stop": ("Stop all sounds", "", ""),
 }
 
 # Pad actions that also act when the pad is let go (the pad must be momentary).
@@ -100,16 +102,34 @@ MEDIA_SHORTCUTS = {
 OVERLAY_POSITIONS = ("bottom", "top", "bottom-right", "top-right")
 
 # Pads whose LED reflects on/off state
-STATEFUL_PADS = {"mic_mute", "output_mute", "obs_scene", "obs_record", "obs_stream", "obs_mute"}
+STATEFUL_PADS = {"mic_mute", "output_mute", "obs_scene", "obs_record", "obs_stream", "obs_mute", "sound"}
 
 
 @dataclass
 class Action:
     type: str = "none"
     target: str = ""
+    # settings beyond the target, for actions that have them ("Play sound": mode,
+    # output, volume); plain JSON values only
+    options: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "target": self.target}
+        d: dict = {"type": self.type, "target": self.target}
+        if self.options:
+            d["options"] = dict(self.options)
+        return d
+
+    @classmethod
+    def from_dict(cls, d) -> Action:
+        if not isinstance(d, dict):
+            return cls()
+        raw = d.get("options")
+        options = {
+            str(k)[:40]: v
+            for k, v in (raw.items() if isinstance(raw, dict) else [])
+            if isinstance(v, (str, int, float, bool)) and not (isinstance(v, str) and len(v) > 500)
+        }
+        return cls(str(d.get("type", "none")), str(d.get("target", "")), options)
 
 
 @dataclass
@@ -221,7 +241,7 @@ class Control:
         if c.kind not in CONTROL_KINDS or c.msg not in MSG_TYPES or c.mode not in MODES or not 1 <= c.channel <= 16:
             return None
         act = d.get("action") if isinstance(d.get("action"), dict) else {}
-        a = Action(str(act.get("type", "none")), str(act.get("target", "")))
+        a = Action.from_dict(act)
         valid = BUTTON_ACTIONS if c.kind == "button" else KNOB_ACTIONS
         c.action = a if a.type in valid or (c.kind == "button" and _plugin_shaped(a.type)) else Action()
         c.group = str(d.get("group", ""))[:40]
@@ -284,7 +304,7 @@ def _parse_actions(items, n: int, valid: dict, fallback) -> list[Action]:
         return fallback()
     out = []
     for it in items[:n]:
-        a = Action(str(it.get("type", "none")), str(it.get("target", ""))) if isinstance(it, dict) else Action()
+        a = Action.from_dict(it)
         out.append(a if a.type in valid or _plugin_shaped(a.type) else Action())
     return out + [Action() for _ in range(n - len(out))]
 
@@ -315,6 +335,18 @@ class DesktopConfig:
         lpd8 = any(obs(a.type) for pa in self.programs.values() for a in pa.pads)
         generic = any(obs(c.action.type) for d in self.devices.values() for prof in d.profiles for c in prof.controls)
         return lpd8 or generic
+
+    def sound_targets(self) -> list[str]:
+        """The files every "Play sound" action plays, LPD8 programs and devices alike."""
+        out = [a.target for pa in self.programs.values() for a in pa.pads if a.type == "sound"]
+        out += [
+            c.action.target
+            for d in self.devices.values()
+            for prof in d.profiles
+            for c in prof.controls
+            if c.action.type == "sound"
+        ]
+        return [t for t in out if t.strip()]
 
     def obs_inputs(self) -> set[str]:
         names = {a.target for pa in self.programs.values() for a in pa.pads if a.type == "obs_mute"}
@@ -420,6 +452,7 @@ ON_COLOURS = {
     "obs_scene": (0, 255, 0),
     "media": (0, 255, 120),
     "marker": (255, 160, 0),
+    "sound": (0, 200, 160),
 }
 
 

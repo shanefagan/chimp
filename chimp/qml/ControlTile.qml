@@ -132,7 +132,7 @@ Rectangle {
 
         ActionPicker {
             Layout.fillWidth: true
-            act: tile.d.action || ({type: "none", target: ""})
+            act: tile.d.action || ({type: "none", target: "", options: {}})
             types: tile.isButton ? desktop.buttonTypes() : desktop.knobTypes()
             liveData: { desktop.liveRevision; return desktop.controlLive(tile.controlIndex) }
             levelStyle: !tile.isButton
@@ -140,6 +140,7 @@ Rectangle {
             tooltipText: "What this control does on your desktop in this profile"
             onTypeChosen: (kind) => desktop.setControlType(tile.controlIndex, kind)
             onTargetEdited: (t) => desktop.setControlTarget(tile.controlIndex, t)
+            onOptionEdited: (key, value) => desktop.setControlOption(tile.controlIndex, key, value)
         }
 
         Item { Layout.fillHeight: true }

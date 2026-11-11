@@ -25,7 +25,7 @@ from PySide6.QtGui import QGuiApplication
 from .. import protocol as p
 from ..device import Lpd8Device
 from . import audio, system
-from .actions import ActionRunner
+from .actions import ActionRunner, sound_key
 from .config import CONFIG_PATH, STATEFUL_PADS, DesktopConfig
 from .focus import FocusTracker
 from .learn import _address, decode
@@ -79,6 +79,7 @@ class DesktopController(QObject):
             level_osd=lambda: not self.overlay.enabled(),
             parent=self,
         )
+        self.runner._sounds_changed = self._sync_sound_state
 
         self.dev = Lpd8Device(self, client_name=CLIENT_NAME)
         self.dev.connectionChanged.connect(self._on_connection)
@@ -133,6 +134,7 @@ class DesktopController(QObject):
             f"{len(self.cfg.devices)} other device(s) configured; config {CONFIG_PATH}"
         )
         self._configure_obs()
+        self._preload_sounds()
         self.focus.start()
         log("window tracking", "on (KWin script loaded)" if self.focus.working else "unavailable")
         if audio.available() and self._mute_watcher.start():
@@ -147,6 +149,8 @@ class DesktopController(QObject):
         self._audio_timer.start()
 
     def stop(self) -> None:
+        if self.runner._sounds is not None:
+            self.runner._sounds.shutdown()
         self._mute_watcher.stop()
         self.focus.stop()
         self.hub.stop()
@@ -163,6 +167,7 @@ class DesktopController(QObject):
         self.cfg = new
         log("config reloaded")
         self._configure_obs()
+        self._preload_sounds()
         self._last_leds = None
         self._poll_audio()
         self._sync_obs_state()
@@ -325,6 +330,7 @@ class DesktopController(QObject):
         self._announced = slot
         self._poll_audio()
         self._sync_obs_state()
+        self._sync_sound_state()
         self._push_leds()
         self._write_status()
 
@@ -465,6 +471,27 @@ class DesktopController(QObject):
         for i, a in enumerate(pads):
             state = {"mic_mute": mic, "output_mute": out}.get(a.type)
             if state is not None and state != self.pad_state[i]:
+                self.pad_state[i] = state
+                changed = True
+        if changed:
+            self._push_leds()
+            self.overlay.refresh_if_shown()
+
+    def _preload_sounds(self) -> None:
+        """Decode the soundboard's clips now, so the first press of each plays at once."""
+        targets = self.cfg.sound_targets()
+        if targets or self.runner._sounds is not None:
+            self.runner.sounds.preload(targets)
+
+    def _sync_sound_state(self) -> None:
+        """Light the pads whose clips are playing."""
+        playing = self.runner._sounds.playing() if self.runner._sounds is not None else set()
+        changed = False
+        for i, a in enumerate(self._active_pads()):
+            if a.type != "sound":
+                continue
+            state = sound_key(f"Pad {i + 1}", a.target) in playing
+            if state != self.pad_state[i]:
                 self.pad_state[i] = state
                 changed = True
         if changed:
