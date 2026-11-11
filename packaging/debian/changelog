@@ -1,3 +1,10 @@
+chimp (0.9.0-1) unstable; urgency=medium
+
+  * Controllers Chimp knows, set up in one click; Chimp Loop takes the
+    shape of your controller
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 11 Nov 2026 21:04:44 +0000
+
 chimp (0.8.0-1) unstable; urgency=medium
 
   * Markers; plugins for your own pad actions; pads and buttons have a
