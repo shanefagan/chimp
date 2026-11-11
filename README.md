@@ -329,7 +329,7 @@ There's no separate voice-chat knob: your own voice is the mic knob, and in-game
 out of the game's own audio stream.
 Pads: mute mic/speakers, media keys, launch app, any KDE global shortcut, shell command,
 OBS scene / record / stream / source mute (obs-websocket v5; password read from OBS),
-markers, and your own actions from plugins.
+markers, a soundboard, and your own actions from plugins.
 
 **Markers** note a moment to come back to when editing (a flubbed line, a retake). Each is a
 line in a text file in Audacity's label format, `start<TAB>end<TAB>label` in seconds, so it
@@ -343,6 +343,21 @@ imports as a label track (File > Import > Labels) or feeds a script that cuts th
 - Otherwise markers go to `~/Videos/Markers/<date>.markers.txt`, timed from midnight.
 - The label has the marker's number, the clock time, the pad's note (its target field, e.g.
   "retake") and anything your plugins add (e.g. where a teleprompter is in the script).
+
+**Soundboard:** give a pad (or any controller's button) **Play sound** and a clip: WAV,
+MP3, OGG, FLAC, Opus and whatever else Qt can decode. Each pad chooses:
+
+- **how a press plays it:** *play it through* (presses overlap, the usual soundboard),
+  *tap to play / tap to stop*, *play from the start* on every press, or *plays while held*
+  (stops when you let go; the pad has to be momentary, its Toggle setting off);
+- **where it plays:** the default output or any other, such as headphones, or a virtual
+  device that a stream or a call picks up;
+- **how loud.**
+
+The ▶ button plays it from the editor to try it. **Stop all sounds** is an action too. Clips
+are decoded when the service starts (and when you change them), so a press plays at once;
+the pad lights while its clip plays. The audio stream opens when something plays and closes
+after 20 seconds of quiet.
 
 **Plugins** add pad and button actions of your own, for things only your machine has (a
 script, an app of yours on the session bus), without changing Chimp. Put a Python file in
