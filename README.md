@@ -70,6 +70,55 @@ it: hold PROGRAM + pad 1–4.
 
 Every controller on the system shows up in the **Device** bar at the top.
 
+**Controllers Chimp knows** are set up in one click (**Set up as …**), with their controls
+named and grouped as on the hardware; give them actions and you're done. Out of the box:
+
+| Controller | What Chimp knows |
+| --- | --- |
+| Akai LPD8 mk2 | everything, read from the device (see above) |
+| teenage engineering EP-133 K.O. II | pads in groups A–D, transport |
+| Korg nanoKONTROL2 | knobs, faders, S / M / R buttons, transport |
+| Akai MIDImix | knobs, faders, mute / solo / rec arm, bank buttons |
+| Akai APC mini, APC mini mk2 | the 8 × 8 grid, faders, side and bottom buttons |
+| Novation Launch Control XL | knobs, faders, buttons (factory template 1) |
+| Behringer X-Touch Mini | encoders (turn and push), buttons, fader, layers A and B (standard mode) |
+| Arturia MiniLab mkII | knobs and pads (factory memory 1) |
+| Akai MPK mini mk3 | knobs; the pads' shape (Learn for their notes) |
+| Akai LPD8, Akai MPD218, Korg nanoPAD2 | the pads' shape (Learn for the rest) |
+
+These are factory settings, from the makers' manuals and other software's mappings, and
+apart from the LPD8 mk2 and the KO II they haven't been tried on the hardware here: if a
+control doesn't respond, or you've reprogrammed the device, Learn it (below). Setting up
+never removes anything, so the two mix.
+
+**Your own:** a controller is a small YAML file. Put one in
+`~/.local/share/chimp/controllers/` (the ones Chimp ships are in `chimp/controllers/`, and
+good ones are welcome as pull requests):
+
+```yaml
+name: Korg nanoKONTROL2
+match: [nanoKONTROL2]              # the device's MIDI name contains one of these
+about: Factory settings, CC mode.
+pads:                              # if it has drum pads
+  columns: 4
+  rows: 2
+  first: bottom-left               # where pad 1 is (or top-left)
+  channel: 10
+  banks: {A: 36, B: 44}            # a bank's first note, or a list of notes; or just
+                                   # how many banks, if you only know the shape
+controls:
+  - {name: "Fader {n}", kind: fader, cc: 0-7, group: Faders}
+  - {name: Play, kind: button, cc: 41, group: Transport}
+```
+
+`kind` is knob, fader, encoder (`mode: rel64` or `rel2c`) or button (`mode: toggle` if it
+latches); a control sends `cc`, `note`, `pc`, `pb` or `rt` (start / continue / stop), as a
+number, a list or a range (`{n}` in the name counts them, from `start:` if not 1). A file
+that doesn't parse is reported in the log and skipped. The overlay and Chimp Loop draw
+pads in the shape the file gives.
+
+**Any other controller** is taught with Learn:
+
 1. Pick the device and click **Learn controls**.
 2. Move every knob and fader through its range, turn encoders both ways, press each button
    twice. The app works out what each control is from what it sends: knob or fader (absolute
@@ -88,6 +137,23 @@ Switch them from the tray icon's menu or give a button **Next/Previous profile**
 `chimp-loop` (or "Chimp Loop" in the launcher and the tray menu) is a Volca Beats-style drum
 machine: 16 parts, live looping and step entry on the same pattern, a sound per pad and a
 master bus over everything.
+
+**It takes the shape of your controller.** A kit has 16 sounds, but an LPD8 has 8 pads: so
+the window shows 8, laid out like the LPD8's, a **page** of the kit at a time (A is sounds
+1–8, B is 9–16), and the step grid shows that page's parts. The page follows the controller.
+
+- **LPD8 mk2:** its programs are the pages (they all send the same notes out of the box, so
+  Chimp asks the device which one it's on). Of the programs without desktop actions, the
+  first is **page A**, the second **page B**, and the third the **FX page**: the pads are
+  roll and the seven glitches, and the knobs move to the master. Hold PROGRAM + pad 1–4 to
+  switch; the window follows within a moment and says where you are.
+- **Controllers with banks** (KO II groups, an MPK mini's A / B): the page is the bank
+  you're playing, shown as that controller's pads (the KO II's 12, three wide).
+- **No controller Chimp knows:** all 16 pads, as before. **Show** picks 8, 12 or 16 yourself.
+
+The tabs above the pads look at another page without moving the controller; its next pad
+brings the view back. For the LPD8, a row of chips shows what each program does, with the
+one it's on lit.
 
 **Pattern**
 - **Record** (Space): play; press again to close the loop. Its length is your take, and the
@@ -129,11 +195,13 @@ playing costs nothing extra; level, pan and sends act at once.
 Presets for the master: **Clean**, **Abyss** (big, dark, octave-down shimmer, dotted
 ping-pong, fuzz, glued and limited), **Bloom**, **Reverse swell**, **Crushed**.
 
-**Knobs:** the LPD8's knobs 1–8 (CC 70–77) are on a page: **Pad** (level, pitch, attack,
-decay, cutoff, resonance, drive, reverb send of the selected part) or **Master** (filter,
-resonance, drive, delay, echoes, reverb, size, compress). The numbered dials show which. K
-switches page, or a controller button assigned to it. Any dial can be given its own knob,
-fader or gamepad axis instead (the small controller icon under it). Double-click a dial to
+**Knobs:** your controller's knobs 1–8 (the LPD8's, a known controller's own, or CC 70–77
+on anything else) are on a page: **Pad** (level, pitch, attack, decay, cutoff, resonance,
+drive, reverb send of the selected part), **Pad 2** (pan, sustain, punch, delay send),
+**Master** (filter, resonance, drive, delay, echoes, reverb, size, compress) or **Master 2**
+(tone, shimmer, limit, swing, volume): between them, every dial. The numbered dials show
+which. K moves to the next page, or a controller button assigned to it. Any dial can be
+given its own knob, fader or gamepad axis instead (the small controller icon under it). Double-click a dial to
 reset it. The selected part only changes when you choose it (click its name, right-click a
 pad, Shift + its key, or hold **Select** + pad); playing pads never moves it.
 
@@ -159,11 +227,12 @@ too: sticks and triggers can be given any parameter (sticks rest in the middle: 
 loaded modulation; the filter's centre is "off"), buttons any sound or action. A Wooting
 keyboard in gamepad mode shows up the same way, so analog key depth can drive a parameter.
 
-**Pads and buttons:** notes 36–51 play sounds 1–16, so an LPD8 program on notes 36–43 plays
-Kick, Snare, Clap, Hi-hat, Open hat, Rim, Tom, Crash, and a KO II group the first 12. **Assign
-pads** maps any pad to any sound; **Controller buttons…** gives record, play, undo, clear,
-quantise, metronome, next kit and knob page to buttons on a controller. Keys: Z X C V, A S D F,
-Q W E R, 1 2 3 4 play the sounds as laid out on screen.
+**Pads and buttons:** a controller Chimp knows plays by position: pad 1 of the page is the
+page's first sound, whatever note it sends, and its buttons do nothing until you assign
+them. On any other controller notes 36–51 play sounds 1–16. **Assign pads** maps any pad to
+any sound; **Controller buttons…** gives record, play, undo, clear, quantise, metronome,
+next kit and knob page to buttons on a controller. Keys follow the pads on screen: Z X C V
+is the bottom row, then A S D F, Q W E R and 1 2 3 4.
 
 **Kits:** the built-in kit, **synth**, is synthesised when Chimp Loop starts (analog drum
 machine recipes: swept-sine kick and toms, six-square-wave hats and cymbals, cowbell,
@@ -213,7 +282,9 @@ them, with that latency taken off.
 While Chimp Loop is open, the desktop service leaves the other controllers to it: no
 desktop actions from the KO II's profile while you drum. The LPD8 stays with the desktop
 while it's on a program with desktop actions (the looper says so in its title bar), so its
-knobs don't turn the volume and the filter at once; switch program to drum.
+knobs don't turn the volume and the filter at once; switch program to drum. The service's
+overlay says what the program you switched to is for ("Chimp Loop B: sounds 9–16"), and the
+editor's program tabs carry the same labels.
 
 ## LPD8 desktop control
 
